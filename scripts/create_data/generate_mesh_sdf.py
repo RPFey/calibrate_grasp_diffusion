@@ -2,6 +2,14 @@ import os
 import pickle
 import h5py
 import shutil
+import random
+import threading
+import open3d as o3d
+from tqdm import tqdm
+from pathlib import Path
+import matplotlib as mpl
+import time
+import signal
 from mesh_to_sdf import sample_sdf_near_surface, get_surface_point_cloud
 
 import trimesh
@@ -11,12 +19,33 @@ import numpy as np
 from sklearn.neighbors import KDTree
 import math
 import pyrender
-
+import argparse
 
 from se3dif.utils import makedirs
+import acronym_tools
+from acronym_tools import Scene, load_mesh, load_grasps, create_gripper_marker
 
 DATA_FOLDER = 'data'
-OBJ_CLASSES = ['Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick']
+OBJ_CLASSES = ['Cup', 'Bottle', 'Bowl', 'Hammer', 'CerealBox', 'Mug', 'Laptop', 'Plate', 'SodaCan', 'Teacup', 'ToiletPaper', 'Shampoo']
+
+class TimeoutException(Exception):
+    pass
+
+def handler(signum, frame):
+    raise TimeoutException("Function timed out!")
+
+def run_with_timeout(func, timeout, *args, **kwargs):
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(timeout)  # Set an alarm for `timeout` seconds
+    try:
+        result = func(*args, **kwargs)
+    except TimeoutException:
+        result = -1  # Handle timeout case
+    except np.linalg.LinAlgError as e:
+        result = -1
+    finally:
+        signal.alarm(0)  # Disable alarm
+    return result
 
 #OBJ_CLASSES = ['Bottle']
 ## Set data folder
@@ -25,12 +54,19 @@ root_folder = os.path.abspath(os.path.join(base_folder, '..'))
 data_folder = os.path.join(root_folder, DATA_FOLDER)
 grasps_folder = os.path.join(data_folder, 'grasps')
 meshes_folder = os.path.join(data_folder, 'meshes')
-sdf_folder = os.path.join(data_folder, 'sdf')
+sdf_folder = os.path.join(data_folder, 'scene_sdf')
 makedirs(sdf_folder)
-
 
 ## Copied from mesh_to_sdf
 def get_unit_spherize_scale(mesh):
+    """
+    Get the scale factor to spherize the mesh
+
+    Parameters
+    ----------
+    mesh : trimesh.Trimesh
+        The input mesh
+    """
     if isinstance(mesh, trimesh.Scene):
         mesh = mesh.dump().sum()
 
@@ -38,11 +74,21 @@ def get_unit_spherize_scale(mesh):
     distances = np.linalg.norm(vertices, axis=1)
     return np.max(distances)
 
-
-
 def generate_mesh_sdf(mesh, absolute=True, normalize=False, n_points=200000):
-
-    print (mesh)
+    """
+    Generate a signed distance field for a mesh
+    
+    Parameters
+    ----------
+    mesh : trimesh.Trimesh
+        The input mesh
+    absolute : bool
+        Whether to take the absolute value of the SDF
+    normalize : bool
+        Whether to normalize the SDF to [0, 1]
+    n_points : int
+        The number of points to sample
+    """
     q_sdf, pcl = sample_sdf_near_surface(mesh, number_of_points=n_points, return_gradients=False)
     query_points, sdf = q_sdf[0], q_sdf[1]
 
@@ -57,86 +103,185 @@ def generate_mesh_sdf(mesh, absolute=True, normalize=False, n_points=200000):
 
     return query_points, sdf
 
-
 if __name__ == '__main__':
+    
+    args = argparse.ArgumentParser()
+    args.add_argument("--mesh_root", type=str, default="/root/calibrate_grasp_diffusion/data")
+    args.add_argument("--support", type=str, required=True)
+    args.add_argument(
+        "--support_scale", default=0.025, help="Scale factor of support mesh."
+    )
+    args.add_argument("--viz", action="store_true", default=False)
+    
+    # support = "/root/calibrate_grasp_diffusion/data/grasps/Table/Table_19e80d699bcbd3168821642e9a54505_0.004756380229523233.h5"
+    args = args.parse_args()
+    support = args.support
+    
+    # load the support mesh
+    support_mesh = load_mesh(
+        support, mesh_root_dir=args.mesh_root, scale=(0.01, 0.0075, 0.01)
+    )
 
+    scene_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+    
     for obj_cls in OBJ_CLASSES:
         grasp_cls_folder = os.path.join(grasps_folder, obj_cls)
-        count = 0
-        for filename in os.listdir(grasp_cls_folder):
-            try:
-                count+=1
-                print(count)
-                ## Load Acronym file
-                load_file = os.path.join(grasp_cls_folder, filename)
-                print(filename)
-                data = h5py.File(load_file, "r")
-                ## Load mesh
-                mesh_fname = data["object/file"][()].decode('utf-8')
-                mesh_load_file = os.path.join(data_folder, mesh_fname)
-                mesh = trimesh.load(mesh_load_file)
-                scale = data["object/scale"][()]
+        for filename in tqdm(os.listdir(grasp_cls_folder), desc="Processing {}".format(obj_cls)):
+            ## Load mesh
+            target_mesh = load_mesh(os.path.join(grasp_cls_folder, filename), mesh_root_dir=args.mesh_root)
+            if not isinstance(target_mesh, trimesh.Trimesh):
+                continue
+            extents = target_mesh.bounding_box.extents
+            ball_range = np.max(extents) * 1.5
+            
+            # check collisions
+            T, success = load_grasps(os.path.join(grasp_cls_folder, filename))
+            
+            # TODO Add Some other Random objects.
+            target_name = "obj0"
+            scene = Scene()
+            scene.add_object("support_object", support_mesh, pose=np.eye(4), support=True)
+            result = run_with_timeout(scene.place_object, 10, target_name, target_mesh)
+            if result == -1:
+                print("Failed to place object")
+                continue
+            # scene.place_object(target_name, target_mesh)
+            
+            trials = 0
+            while len(scene._objects) < 5 and trials < 20:
+                name = np.random.choice(OBJ_CLASSES)
+                collision_cls_folder = os.path.join(grasps_folder, name)
+                random_mesh_filename = np.random.choice(os.listdir(collision_cls_folder))
+                random_mesh = load_mesh(
+                    os.path.join(collision_cls_folder, random_mesh_filename),
+                    mesh_root_dir=args.mesh_root,
+                )
+                if isinstance(random_mesh, trimesh.Trimesh):
+                    scale = random.random() + 0.5
+                    random_mesh.apply_scale(scale)
+                    result = run_with_timeout(scene.place_object, 10, f"obj{len(scene._objects)}", random_mesh)
+                    if result == -1:
+                        print("Failed to place object")
+                        continue
+                    print(trials)
+                    trials += 1
 
-                if type(mesh) == trimesh.scene.scene.Scene:
-                    mesh = trimesh.util.concatenate(mesh.dump())
+            # Crop the target mesh
+            target_T = scene._poses[target_name]
+            moc_T = scene.get_transform(target_name, "com")
+            mos = moc_T[:3, 3]
+            obj_pose = scene._poses[target_name]
+            gripper_mesh = trimesh.load(
+                Path(acronym_tools.__file__).parent.parent / "data/franka_gripper_collision_mesh.stl"
+            )
+            collision_free = np.array(
+                [
+                    i
+                    for i, t in enumerate(T[success == 1])
+                    if not scene.in_collision_with(
+                        gripper_mesh, transform=np.dot(obj_pose, t)
+                    )
+                ]
+            )
+            print("Number of collision free grasps: ", len(collision_free))
+            if len(collision_free) == 0:
+                continue
+            
+            query_pts, _ = generate_mesh_sdf(target_mesh)
+            query_pts = query_pts @ target_T[:3, :3].T + target_T[:3, 3]
+            distance = np.linalg.norm(query_pts - mos[None, :], axis=1)
+            query_pts = query_pts[distance < ball_range]
+            
+            # get o3d mesh and compute SDF
+            o3d_mesh = scene.as_open3d_scene()     
+            ray_scene = o3d.t.geometry.RaycastingScene()
+            for m in o3d_mesh:
+                m_t = o3d.t.geometry.TriangleMesh.from_legacy(m)
+                ray_scene.add_triangles(m_t)    
+            query_point = o3d.core.Tensor(query_pts, dtype=o3d.core.Dtype.Float32)
+            unsigned_distance = ray_scene.compute_distance(query_point)
+            signed_distance = ray_scene.compute_signed_distance(query_point)
+            signed_distance = signed_distance.numpy()
+            
+            # ball query
+            pts = scene.sample_points(pts_density = 2e5)
+            scene_pts = []
+            target_index = []
+            target_center = np.zeros((3, ))
+            for name, pt in pts.items():
+                if name != target_name:
+                    distance = np.linalg.norm(pt - mos[None, :], axis=1)
+                    crop_pt = pt[distance < 2 * ball_range]
+                    target_index.append(np.zeros((len(crop_pt), ), dtype=np.uint8))
+                else:
+                    crop_pt = pt
+                    target_center = pt.mean(axis=0)
+                    target_index.append(np.ones((len(crop_pt), ), dtype=np.uint8))
+                
+                scene_pts.append(crop_pt)
+            scene_pts = np.concatenate(scene_pts, axis=0)
+            target_index = np.concatenate(target_index, axis=0)
+        
+            # visualize the scene
+            # object_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+            # object_coord.transform(target_T)
+            # o3d_mesh.append(scene_origin)
+            # o3d_mesh.append(object_coord)
+            # o3d.visualization.draw_geometries(o3d_mesh)
+                        
+            # Centralize & Transform
+            centralize = np.eye(4)
+            centralize[:3, 3] = -target_center
+            scene_pts = scene_pts - target_center
+            query_pts = query_pts - target_center
 
-                scale = mesh.scale
-                mesh.apply_scale(1/scale)
-                H = np.eye(4)
-                loc = mesh.centroid
-                H[:-1, -1] = -loc
-                mesh.apply_transform(H)
+            grasps = []
+            for t in T[success == 1][collision_free]:
+                transform = centralize @ obj_pose @ t # @ 
+                grasps.append(transform)
+            grasps = np.stack(grasps, axis=0)
 
+            # visualize the crop scene
+            if args.viz:
+                crop_pcd = o3d.geometry.PointCloud()
+                crop_pcd.points = o3d.utility.Vector3dVector(scene_pts)
+                grasps_o3d = []            
+                for idx, t in enumerate(T[success == 1][collision_free]):
+                    transform = centralize @ obj_pose @ t # @ 
+                    g = create_gripper_marker(color=[0, 255, 0])
+                    g.apply_transform(transform)
 
-                print(mesh)
+                    m = o3d.geometry.TriangleMesh()
+                    m.vertices = o3d.utility.Vector3dVector(g.vertices)
+                    m.triangles = o3d.utility.Vector3iVector(g.faces)
+                    m.paint_uniform_color([0, 1, 0])
+                    grasps_o3d.append(m)
 
+                    grasp_origin = grasps[idx]
+                    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+                    origin.transform(grasp_origin)
+                    grasps_o3d.append(origin)
 
-                mesh_name = mesh_fname.split('/')[-1]
-                mesh_type = mesh_fname.split('/')[1]
+                cmap = mpl.cm.get_cmap("plasma")
+                colors = cmap((signed_distance - signed_distance.min()) / (signed_distance.max() - signed_distance.min()))[:, :3]
+                pcd_sdf = o3d.geometry.PointCloud()
+                pcd_sdf.points = o3d.utility.Vector3dVector(query_pts)
+                pcd_sdf.colors = o3d.utility.Vector3dVector(colors)
+                o3d.visualization.draw_geometries([crop_pcd, scene_origin, origin, *grasps_o3d])
 
+            ## save info
+            save_sdf_folder = os.path.join(sdf_folder, obj_cls)
+            makedirs(save_sdf_folder)
 
-                query_points, sdf = generate_mesh_sdf(mesh)
+            sdf_mesh = filename.split('.obj')[0] + '.npz'
+            save_file = os.path.join(save_sdf_folder, sdf_mesh)
+            sdf_dict = {
+                'scene_pts': scene_pts,
+                "target_index": target_index,
+                'xyz': query_pts,
+                'sdf': signed_distance,
+                'grasps': grasps
+            }
 
-                ## save info
-                save_sdf_folder = os.path.join(sdf_folder, mesh_type)
-                makedirs(save_sdf_folder)
+            np.savez(save_file, **sdf_dict)
 
-
-                sdf_mesh = mesh_name.split('.obj')[0] + '.json'
-                save_file = os.path.join(save_sdf_folder, sdf_mesh)
-                sdf_dict = {
-                    'loc': loc,
-                    'scale': scale,
-                    'xyz': query_points,
-                    'sdf': sdf,
-                }
-
-                with open(save_file, 'wb') as handle:
-                    pickle.dump(sdf_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-
-                ## VISUALIZE
-                view_3d = False
-                if view_3d:
-
-                    colors = np.zeros(query_points.shape)
-                    colors[:, 0] = sdf / 0.1 * (sdf < 0.1)
-                    colors[:, 1] = (sdf - 0.1) / 0.6 * ((sdf > 0.1) & (sdf < 0.6))
-                    colors[:, 2] = sdf * (sdf > 0.6)
-
-                    idxs = np.argwhere(sdf < 10.01)[:, 0]
-                    xyz = query_points[idxs, ...]
-                    colors_xyz = colors[idxs, ...]
-
-                    cloud = pyrender.Mesh.from_points(xyz, colors=colors_xyz)
-
-
-                    scene = pyrender.Scene()
-
-                    scene.add(cloud)
-                    #scene.add(cloud_pcl)
-
-                    viewer = pyrender.Viewer(scene, use_raymond_lighting=True, point_size=2)
-
-            except:
-                print('here')

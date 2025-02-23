@@ -60,7 +60,7 @@ class GraspDiffusionFields(nn.Module):
     ''' Grasp DiffusionFields. SE(3) diffusion model to learn 6D grasp distributions. See
         SE(3)-DiffusionFields: Learning cost functions for joint grasp and motion optimization through diffusion
     '''
-    def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder):
+    def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, num_scene_points=-1):
         super().__init__()
         ## Register points to map H to points ##
         self.register_buffer('points', points)
@@ -74,9 +74,14 @@ class GraspDiffusionFields(nn.Module):
         self.feature_encoder = feature_encoder
         ## Decoder ##
         self.decoder = decoder
+        self.num_scene_points = num_scene_points
 
     def set_latent(self, O, batch = 1):
-        self.z = self.vision_encoder(O.squeeze(1))
+        if self.num_scene_points < 0:
+            self.z = self.vision_encoder(O.squeeze(1))
+        else:
+            self.z = self.vision_encoder(O[:, self.num_scene_points:, :])
+            self.env_z = self.vision_encoder(O)
         
     def forward(self, H, k):
         ## 1. Represent H with points
@@ -88,6 +93,13 @@ class GraspDiffusionFields(nn.Module):
         z_ext = z_ext.unsqueeze(1).repeat(1, p.shape[1], 1)
         ## 2. Get Features
         psi = self.feature_encoder(p, k_ext, z_ext)
+        
+        if self.num_scene_points > 0:
+            env_z_ext = self.env_z.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, self.z.shape[-1])
+            env_z_ext = env_z_ext.unsqueeze(1).repeat(1, p.shape[1], 1)
+            env_psi = self.feature_encoder(p, k_ext, env_z_ext)
+            psi = torch.cat((psi, env_psi[..., [0]]), dim=-1)
+        
         ## 3. Flat and get energy
         psi_flatten = psi.reshape(psi.shape[0], -1)
         e = self.decoder(psi_flatten)
@@ -103,7 +115,7 @@ class GraspDiffusionFields(nn.Module):
         """
         k = torch.rand_like(x[..., 0])
         
-        latent_vecs = self.z
+        latent_vecs = self.env_z if hasattr(self, 'env_z') else self.z
         repeat_times = x.shape[0] // latent_vecs.shape[0]
         latent_vecs = latent_vecs.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, latent_vecs.shape[-1])
         psi = self.feature_encoder(x, k, latent_vecs)

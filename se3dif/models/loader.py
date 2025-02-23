@@ -124,7 +124,12 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     else:
         points = models.points.get_3d_pts(n_points=points_params['n_points'])
     # Energy Based Model
-    in_dim = points_params['n_points']*feat_enc_params['out_dim']
+    num_scene_points = args.get('num_scene_points', -1)
+    if num_scene_points > 0:
+        in_dim = points_params['n_points'] * (feat_enc_params['out_dim'] + 1)
+    else:
+        in_dim = points_params['n_points'] * feat_enc_params['out_dim']
+
     hidden_dim = 512
     energy_net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
@@ -134,5 +139,5 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     )
 
     model = models.GraspDiffusionFields(vision_encoder=vision_encoder, feature_encoder=feature_encoder, geometry_encoder=geometry_encoder,
-                                       decoder=energy_net, points=points).to(device)
+                                       decoder=energy_net, points=points, num_scene_points=num_scene_points).to(device)
     return model

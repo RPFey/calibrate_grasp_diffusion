@@ -19,7 +19,7 @@ def denoising_summary(model, model_input, ground_truth, info, writer, iter, pref
     model.eval()
     model.set_latent(observation[:1,...], batch=batch)
     generator = Grasp_AnnealedLD(model, batch=batch, T=30, T_fit=50, device=observation.device)
-    H = generator.sample()
+    H = generator.sample()[0]
 
     H = to_numpy(H)
     H[:, :3, -1]*=1/8

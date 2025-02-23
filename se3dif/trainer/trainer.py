@@ -9,6 +9,9 @@ from collections import defaultdict
 from se3dif.utils import makedirs, dict_to_device
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.autonotebook import tqdm
+import logging
+
+# log to .log file
 
 
 def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
@@ -33,6 +36,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
         exp_name = datetime.datetime.now().strftime("%m.%d.%Y %H:%M:%S")
         writer = SummaryWriter(summaries_dir+ '/' + exp_name)
+        logging.basicConfig(filename=os.path.join(summaries_dir, exp_name, 'training.log'), level=logging.INFO)
 
     total_steps = 0
     with tqdm(total=len(train_dataloader) * epochs) as pbar:
@@ -48,8 +52,10 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 model_input = dict_to_device(model_input, device)
                 gt = dict_to_device(gt, device)
 
-                start_time = time.time()
+                forward_start_time = time.time()
                 losses, iter_info = loss_fn(model, model_input, gt)
+                if rank == 0:
+                    logging.info("Forward time: %0.6f" % (time.time() - forward_start_time))
 
                 train_loss = 0.
                 for loss_name, loss in losses.items():
@@ -69,9 +75,12 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     if summary_fn is not None:
                         summary_fn(model, model_input, gt, iter_info, writer, total_steps)
 
+                backward_start_time = time.time()
                 for optim in optimizers:
                     optim.zero_grad()
                 train_loss.backward()
+                if rank == 0:
+                    logging.info("Backward time: %0.6f" % (time.time() - backward_start_time))
 
                 if clip_grad:
                     if isinstance(clip_grad, bool):
@@ -86,7 +95,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     pbar.update(1)
 
                 if not total_steps % steps_til_summary and rank == 0:
-                    print("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
+                    print("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - forward_start_time))
 
                     if val_dataloader is not None:
                         print("Running validation set...")
