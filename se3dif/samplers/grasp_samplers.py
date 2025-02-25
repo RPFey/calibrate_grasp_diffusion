@@ -26,7 +26,6 @@ class ApproximatedGrasp_AnnealedLD():
         return np.sqrt((sigma ** (2 * t) - 1.) / (2. * np.log(sigma)))
 
     def _step(self, H0, t, noise_off=True):
-
         ## Phase
         eps = 1e-3
         phase = ((self.T - t)/self.T) + eps
@@ -46,11 +45,8 @@ class ApproximatedGrasp_AnnealedLD():
             noise = torch.zeros_like(xw0)
         else:
             noise = torch.randn_like(xw0)
-
         noise = np.sqrt(c_lr)*noise
-
         xw01 = xw0 + np.sqrt(alpha)*ratio*noise
-
 
         ## 2. Compute gradient ##
         t_in = phase*torch.ones_like(xw01[...,0])
@@ -150,7 +146,7 @@ class Grasp_AnnealedLD():
                 noise = torch.randn_like(phi0_in)*noise_std
 
             ## 4. Compute translation ##
-            delta = -c_lr/2*d_phi + np.sqrt(c_lr)*noise
+            delta = -c_lr/2 * d_phi + np.sqrt(c_lr) * noise
             w_Delta = SO3().exp_map(delta[:, 3:])
             t_delta = delta[:, :3]
 

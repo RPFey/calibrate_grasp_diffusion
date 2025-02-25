@@ -1,5 +1,5 @@
-from .denoising_loss import ProjectedSE3DenoisingLoss, SE3DenoisingLoss
-from .sdf_loss import SDFLoss
+from .denoising_loss import ProjectedSE3DenoisingLoss, SE3DenoisingLoss, DirichletSE3DenoisingLoss
+from .sdf_loss import SDFLoss, NLLLoss
 
 
 def get_losses(args):
@@ -12,6 +12,10 @@ def get_losses(args):
         loss_fns['denoise'] = ProjectedSE3DenoisingLoss()
     if 'denoising_loss' in losses:
         loss_fns['denoise'] = SE3DenoisingLoss()
+    if 'dirichlet_denoising_loss' in losses:
+        loss_fns['denoise'] = DirichletSE3DenoisingLoss()
+    if 'nll_loss' in losses:
+        loss_fns['nll'] = NLLLoss()
 
     loss_dict = LossDictionary(loss_dict=loss_fns)
     return loss_dict

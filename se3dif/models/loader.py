@@ -9,7 +9,13 @@ from se3dif import models
 from se3dif.utils import get_pretrained_models_src, load_experiment_specifications
 pretrained_models_dir = get_pretrained_models_src()
 
-
+class Exp(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def forward(self, x):
+        return torch.exp(x)
+    
 def load_model(args)->models.GraspDiffusionFields:
     if 'pretrained_model' in args:
         model_args = load_experiment_specifications(os.path.join(pretrained_models_dir,
@@ -130,14 +136,28 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     else:
         in_dim = points_params['n_points'] * feat_enc_params['out_dim']
 
+    # get nenergy net final distribution
     hidden_dim = 512
-    energy_net = nn.Sequential(
+    
+    distribution = args.get('distribution', 'bernoulli')
+    if distribution == 'bernoulli':
+        energy_net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
-    )
-
+        )
+    elif distribution == 'dirichlet':
+        energy_net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2),
+            Exp(),
+        )
+    else:
+        raise ValueError(f"Unknown distribution: {distribution}")
+    
     model = models.GraspDiffusionFields(vision_encoder=vision_encoder, feature_encoder=feature_encoder, geometry_encoder=geometry_encoder,
-                                       decoder=energy_net, points=points, num_scene_points=num_scene_points).to(device)
+                                       decoder=energy_net, points=points, num_scene_points=num_scene_points, distribution=distribution).to(device)
     return model

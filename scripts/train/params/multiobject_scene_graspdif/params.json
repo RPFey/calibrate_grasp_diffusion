@@ -1,10 +1,10 @@
 {
   "Description" : [ "This experiment trains jointly an SDF model and a SE(3) Grasp Energy" ],
-  "exp_log_dir": "multiobject_partial_graspdif",
+  "exp_log_dir": "multiobject_scene_graspdif_s8",
   "single_object": false,
   "TrainSpecs": {
-    "batch_size": 2,
-    "num_epochs": 90000,
+    "batch_size": 4,
+    "num_epochs": 1000,
     "steps_til_summary": 500,
     "iters_til_checkpoint": 1000,
     "epochs_til_checkpoint": 10
@@ -37,7 +37,7 @@
     "decoder": {
       "hidden_dim": 512
     }
-  },
+    },
   "LearningRateSchedule" : [
     {
       "Type" : "Step",

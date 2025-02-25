@@ -441,8 +441,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                                    'Book', 'Books', 'Camera','CerealBox', 'Cookie','Hammer', 'Hanger', 'Knife', 'MilkCarton', 'Painting',
                                    'PillBottle', 'Plant','PowerSocket', 'PowerStrip', 'PS3', 'PSP', 'Ring', 'Scissors', 'Shampoo', 'Shoes',
                                    'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
-                                   'ToyFigure', 'Wallet','WineGlass',
-                                   'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
+                                   'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
                         visualize = False, num_grasps = 200, num_scene_pts = 2048, num_target_pts = 1024):
         class_type = ['Cup']
         self.class_type = class_type
@@ -461,13 +460,12 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
 
     def _get_item(self, index):
         ## Load Files ##
-        
         data = np.load(self.files[index])
         scene_pts = data['scene_pts']
         query_pts = data['xyz']
         sdf = data['sdf']
         target_index = data['target_index']
-
+    
         # sample_sdf
         if len(query_pts) > self.num_target_pts:
             rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts)
@@ -486,6 +484,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         elif len(target_pts) < self.num_target_pts:
             rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts-len(target_pts))
             target_pts = np.concatenate([target_pts, target_pts[rix, ...]], axis=0)
+        mean = np.mean(target_pts, 0)
 
         surr_pts = scene_pts[target_index == 0, :]
         if len(surr_pts) > self.num_scene_pts:
@@ -503,8 +502,22 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         elif len(H_grasps) < self.num_grasps:
             rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps-len(H_grasps))
             H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
-
+        
+        pcl = np.concatenate([surr_pts, target_pts], axis=0)
         #######################
+        
+        ## Random rotation ##
+        # R = special_ortho_group.rvs(3)
+        # H = np.eye(4)
+        # H[:3, :3] = R
+        # ## translate ##
+        # query_pts = query_pts - mean
+        # pcl = pcl - mean
+        # H_grasps[..., :3, -1] = H_grasps[..., :3, -1] - mean
+        # ## rotate ##
+        # pcl = np.einsum('mn,bn->bm',R, pcl)
+        # query_pts = np.einsum('mn,bn->bm',R, query_pts)
+        # H_grasps = np.einsum('mn,bnk->bmk', H, H_grasps)
 
         # Visualize
         if self.visualize:
@@ -525,7 +538,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         # x_ene_pos - (K, 4, 4); K = 200
         # scale - (1)
 
-        res = {'visual_context': torch.from_numpy(np.concatenate([surr_pts, target_pts])).float() * self.scale,
+        res = {'visual_context': torch.from_numpy(pcl).float() * self.scale,
                'x_sdf': torch.from_numpy(query_pts).float() * self.scale,
                'x_ene_pos': torch.from_numpy(H_grasps).float(),
                'scale': torch.Tensor([self.scale]).float()}

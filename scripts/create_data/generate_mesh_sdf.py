@@ -26,7 +26,12 @@ import acronym_tools
 from acronym_tools import Scene, load_mesh, load_grasps, create_gripper_marker
 
 DATA_FOLDER = 'data'
-OBJ_CLASSES = ['Cup', 'Bottle', 'Bowl', 'Hammer', 'CerealBox', 'Mug', 'Laptop', 'Plate', 'SodaCan', 'Teacup', 'ToiletPaper', 'Shampoo']
+OBJ_CLASSES = ['Cup', 'Mug', 'Fork', 'Hat', 'Bottle', 'Bowl', 'Car', 'Donut', 'Laptop', 'MousePad', 'Pencil',
+                'Plate', 'ScrewDriver', 'WineBottle','Backpack', 'Bag', 'Banana', 'Battery', 'BeanBag', 'Bear',
+                'Book', 'Books', 'Camera','CerealBox', 'Cookie','Hammer', 'Hanger', 'Knife', 'MilkCarton', 'Painting',
+                'PillBottle', 'Plant','PowerSocket', 'PowerStrip', 'PS3', 'PSP', 'Ring', 'Scissors', 'Shampoo', 'Shoes',
+                'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
+                'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick']
 
 class TimeoutException(Exception):
     pass
@@ -103,11 +108,159 @@ def generate_mesh_sdf(mesh, absolute=True, normalize=False, n_points=200000):
 
     return query_points, sdf
 
+class PyrenderScene(Scene):
+    def as_pyrender_scene(self):
+        """Return pyrender scene representation.
+
+        Returns:
+            pyrender.Scene: Representation of the scene
+        """
+        pyrender_scene = pyrender.Scene()
+        for obj_id, obj_mesh in self._objects.items():
+            mesh = pyrender.Mesh.from_trimesh(obj_mesh, smooth=False)
+            pyrender_scene.add(mesh, name=obj_id, pose=self._poses[obj_id])
+        return pyrender_scene
+
+
+class SceneRenderer:
+    def __init__(
+        self,
+        pyrender_scene,
+        fov=np.pi / 6.0,
+        width=400,
+        height=400,
+        aspect_ratio=1.0,
+        z_near=0.001,
+    ):
+        """Create an image renderer for a scene.
+
+        Args:
+            pyrender_scene (pyrender.Scene): Scene description including object meshes and their poses.
+            fov (float, optional): Field of view of camera. Defaults to np.pi/6.
+            width (int, optional): Width of camera sensor (in pixels). Defaults to 400.
+            height (int, optional): Height of camera sensor (in pixels). Defaults to 400.
+            aspect_ratio (float, optional): Aspect ratio of camera sensor. Defaults to 1.0.
+            z_near (float, optional): Near plane closer to which nothing is rendered. Defaults to 0.001.
+        """
+        self._fov = fov
+        self._width = width
+        self._height = height
+        self._z_near = z_near
+        self._scene = pyrender_scene
+
+        self._camera = pyrender.PerspectiveCamera(
+            yfov=fov, aspectRatio=aspect_ratio, znear=z_near
+        )
+
+    def get_trimesh_camera(self):
+        """Get a trimesh object representing the camera intrinsics.
+
+        Returns:
+            trimesh.scene.cameras.Camera: Intrinsic parameters of the camera model
+        """
+        return trimesh.scene.cameras.Camera(
+            fov=(np.rad2deg(self._fov), np.rad2deg(self._fov)),
+            resolution=(self._height, self._width),
+            z_near=self._z_near,
+        )
+
+    def _to_pointcloud(self, depth, color_mask=None):
+        """Convert depth image to pointcloud given camera intrinsics.
+
+        Args:
+            depth (np.ndarray): Depth image.
+
+        Returns:
+            np.ndarray: Point cloud.
+        """
+        fy = fx = 0.5 / np.tan(self._fov * 0.5)  # aspectRatio is one.
+        height = depth.shape[0]
+        width = depth.shape[1]
+
+        mask = np.where(depth > 0)
+
+        x = mask[1]
+        y = mask[0]
+        
+        if color_mask is not None:
+            pts_mask = color_mask[y, x]
+        else:
+            pts_mask = None
+
+        normalized_x = (x.astype(np.float32) - width * 0.5) / width
+        normalized_y = (y.astype(np.float32) - height * 0.5) / height
+
+        world_x = normalized_x * depth[y, x] / fx
+        world_y = normalized_y * depth[y, x] / fy
+        world_z = depth[y, x]
+        ones = np.ones(world_z.shape[0], dtype=np.float32)
+
+        return np.vstack((world_x, world_y, world_z, ones)).T, pts_mask
+
+    def render(self, camera_pose, target_id="", render_pc=True):
+        """Render RGB/depth image, point cloud, and segmentation mask of the scene.
+
+        Args:
+            camera_pose (np.ndarray): Homogenous 4x4 matrix describing the pose of the camera in scene coordinates.
+            target_id (str, optional): Object ID which is used to create the segmentation mask. Defaults to ''.
+            render_pc (bool, optional): If true, point cloud is also returned. Defaults to True.
+
+        Returns:
+            np.ndarray: Color image.
+            np.ndarray: Depth image.
+            np.ndarray: Point cloud.
+            np.ndarray: Segmentation mask.
+        """
+        # Keep local to free OpenGl resources after use
+        renderer = pyrender.OffscreenRenderer(
+            viewport_width=self._width, viewport_height=self._height
+        )
+
+        # add camera and light to scene
+        scene = self._scene.as_pyrender_scene()
+        scene.add(self._camera, pose=camera_pose, name="camera")
+        light = pyrender.SpotLight(
+            color=np.ones(4),
+            intensity=3.0,
+            innerConeAngle=np.pi / 16,
+            outerConeAngle=np.pi / 6.0,
+        )
+        scene.add(light, pose=camera_pose, name="light")
+
+        # render the full scene
+        color, depth = renderer.render(scene)
+
+        segmentation = np.zeros(depth.shape, dtype=np.uint8)
+
+        # hide all objects
+        for node in scene.mesh_nodes:
+            node.mesh.is_visible = False
+
+        # Render only target object and add to segmentation mask
+        for node in scene.mesh_nodes:
+            if node.name == target_id:
+                node.mesh.is_visible = True
+                _, object_depth = renderer.render(scene)
+                mask = np.logical_and(
+                    (np.abs(object_depth - depth) < 1e-6), np.abs(depth) > 0
+                )
+                segmentation[mask] = 1
+
+        for node in scene.mesh_nodes:
+            node.mesh.is_visible = True
+
+        if render_pc:
+            pc, pc_mask = self._to_pointcloud(depth, segmentation)
+        else:
+            pc, pc_mask = None, None
+
+        return color, depth, segmentation, pc, pc_mask
+
 if __name__ == '__main__':
     
     args = argparse.ArgumentParser()
     args.add_argument("--mesh_root", type=str, default="/root/calibrate_grasp_diffusion/data")
-    args.add_argument("--support", type=str, required=True)
+    args.add_argument("--support", type=str, default="/root/calibrate_grasp_diffusion/data/grasps/Table/Table_19e80d699bcbd3168821642e9a54505_0.004756380229523233.h5")
     args.add_argument(
         "--support_scale", default=0.025, help="Scale factor of support mesh."
     )
@@ -139,13 +292,12 @@ if __name__ == '__main__':
             
             # TODO Add Some other Random objects.
             target_name = "obj0"
-            scene = Scene()
+            scene = PyrenderScene()
             scene.add_object("support_object", support_mesh, pose=np.eye(4), support=True)
             result = run_with_timeout(scene.place_object, 10, target_name, target_mesh)
             if result == -1:
                 print("Failed to place object")
                 continue
-            # scene.place_object(target_name, target_mesh)
             
             trials = 0
             while len(scene._objects) < 5 and trials < 20:
@@ -184,7 +336,7 @@ if __name__ == '__main__':
                 ]
             )
             print("Number of collision free grasps: ", len(collision_free))
-            if len(collision_free) == 0:
+            if len(collision_free) < 2:
                 continue
             
             query_pts, _ = generate_mesh_sdf(target_mesh)
@@ -204,27 +356,51 @@ if __name__ == '__main__':
             signed_distance = signed_distance.numpy()
             
             # ball query
-            pts = scene.sample_points(pts_density = 2e5)
-            scene_pts = []
-            target_index = []
-            target_center = np.zeros((3, ))
-            for name, pt in pts.items():
-                if name != target_name:
-                    distance = np.linalg.norm(pt - mos[None, :], axis=1)
-                    crop_pt = pt[distance < 2 * ball_range]
-                    target_index.append(np.zeros((len(crop_pt), ), dtype=np.uint8))
-                else:
-                    crop_pt = pt
-                    target_center = pt.mean(axis=0)
-                    target_index.append(np.ones((len(crop_pt), ), dtype=np.uint8))
+            # pts = scene.sample_points(pts_density = 2e5)
+            # scene_pts = []
+            # target_index = []
+            # target_center = np.zeros((3, ))
+            # for name, pt in pts.items():
+            #     if name != target_name:
+            #         distance = np.linalg.norm(pt - mos[None, :], axis=1)
+            #         crop_pt = pt[distance < 2 * ball_range]
+            #         target_index.append(np.zeros((len(crop_pt), ), dtype=np.uint8))
+            #     else:
+            #         crop_pt = pt
+            #         target_center = pt.mean(axis=0)
+            #         target_index.append(np.ones((len(crop_pt), ), dtype=np.uint8))
                 
-                scene_pts.append(crop_pt)
-            scene_pts = np.concatenate(scene_pts, axis=0)
-            target_index = np.concatenate(target_index, axis=0)
+            #     scene_pts.append(crop_pt)
+            # scene_pts = np.concatenate(scene_pts, axis=0)
+            # target_index = np.concatenate(target_index, axis=0)
+
+            # choose camera intrinsics and extrinsics
+            renderer = SceneRenderer(scene, fov=np.pi / 3, width=640, height=480)
+            trimesh_camera = renderer.get_trimesh_camera()
+            feasible_poses = T[success == 1][collision_free]
+            rand_idx = np.random.choice(len(feasible_poses))
+            camera_pose = feasible_poses[rand_idx] @ np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) # change x right, y up, z back
+            distance = np.random.uniform(low=0.7, high=0.9)
+            camera_pose[:3, 3] = camera_pose[:3, 3] + camera_pose[:3, 2] * distance
+            color, depth, segmentation, scene_pts, target_index = renderer.render(
+                camera_pose=camera_pose, target_id=target_name
+            )
+            
+            if segmentation.max() == 0:
+                print("No target object in the scene")
+                continue
+
+            c2w = camera_pose @ np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            scene_pts = scene_pts @ c2w.T
+            target_center = np.sum(scene_pts * target_index[:, None], axis=0) / np.sum(target_index)
+            scene_pts = scene_pts[:, :3]
+            target_center = target_center[:3]
         
             # visualize the scene
             # object_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
             # object_coord.transform(target_T)
+            # cam_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+            # cam_coord.transform(c2w)
             # o3d_mesh.append(scene_origin)
             # o3d_mesh.append(object_coord)
             # o3d.visualization.draw_geometries(o3d_mesh)
@@ -240,6 +416,18 @@ if __name__ == '__main__':
                 transform = centralize @ obj_pose @ t # @ 
                 grasps.append(transform)
             grasps = np.stack(grasps, axis=0)
+            
+            # collect Failure grasps
+            F_grasps = T[success == 0]
+            collision_label = np.ones((T[success == 1].shape[0], ), np.uint8)
+            collision_label[collision_free] = 0
+            collistion_grasp = feasible_poses[collision_label]
+            neg_grasps = np.concatenate([F_grasps, collistion_grasp], axis=0)
+            F_grasps = []
+            for t in neg_grasps:
+                transform = centralize @ obj_pose @ t
+                F_grasps.append(transform)
+            F_grasps = np.stack(F_grasps, axis=0)
 
             # visualize the crop scene
             if args.viz:
@@ -280,7 +468,8 @@ if __name__ == '__main__':
                 "target_index": target_index,
                 'xyz': query_pts,
                 'sdf': signed_distance,
-                'grasps': grasps
+                'grasps': grasps,
+                "F_grasps": F_grasps
             }
 
             np.savez(save_file, **sdf_dict)

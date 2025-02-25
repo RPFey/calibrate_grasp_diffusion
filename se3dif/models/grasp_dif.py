@@ -60,7 +60,8 @@ class GraspDiffusionFields(nn.Module):
     ''' Grasp DiffusionFields. SE(3) diffusion model to learn 6D grasp distributions. See
         SE(3)-DiffusionFields: Learning cost functions for joint grasp and motion optimization through diffusion
     '''
-    def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, num_scene_points=-1):
+    def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, 
+                    num_scene_points=-1, distribution="bernoulli"):
         super().__init__()
         ## Register points to map H to points ##
         self.register_buffer('points', points)
@@ -75,6 +76,7 @@ class GraspDiffusionFields(nn.Module):
         ## Decoder ##
         self.decoder = decoder
         self.num_scene_points = num_scene_points
+        self.distribution = distribution
 
     def set_latent(self, O, batch = 1):
         if self.num_scene_points < 0:
@@ -84,6 +86,23 @@ class GraspDiffusionFields(nn.Module):
             self.env_z = self.vision_encoder(O)
         
     def forward(self, H, k):
+        logits = self.get_logits(H, k)
+        
+        if self.distribution == 'bernoulli':
+            e = torch.sigmoid(logits)
+        elif self.distribution == 'dirichlet':
+            dist = torch.distributions.Dirichlet(logits)
+            # compute the log likelihood of the positive label
+            positive_label = torch.ones_like(logits)
+            positive_label[:, 0].fill_(1e-3)
+            positive_label[:, 1].fill_(1 - 1e-3)
+            e = dist.log_prob(positive_label)
+        else:
+            raise ValueError(f"Unknown distribution {self.distribution}")
+        
+        return e
+    
+    def get_logits(self, H, k):
         ## 1. Represent H with points
         repeat_times = H.shape[0] // self.z.shape[0]
         z_ext = self.z.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, self.z.shape[-1])
@@ -91,6 +110,7 @@ class GraspDiffusionFields(nn.Module):
         p = self.geometry_encoder(H, self.points)
         k_ext = k.unsqueeze(1).repeat(1, p.shape[1])
         z_ext = z_ext.unsqueeze(1).repeat(1, p.shape[1], 1)
+        
         ## 2. Get Features
         psi = self.feature_encoder(p, k_ext, z_ext)
         
@@ -102,9 +122,11 @@ class GraspDiffusionFields(nn.Module):
         
         ## 3. Flat and get energy
         psi_flatten = psi.reshape(psi.shape[0], -1)
-        e = self.decoder(psi_flatten)
-        return e
-
+        logits = self.decoder(psi_flatten)
+        
+        return logits
+        
+        
     def compute_sdf(self, x):
         """ Compute SDF from the feature encoder 
         
