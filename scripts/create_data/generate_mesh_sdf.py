@@ -26,12 +26,7 @@ import acronym_tools
 from acronym_tools import Scene, load_mesh, load_grasps, create_gripper_marker
 
 DATA_FOLDER = 'data'
-OBJ_CLASSES = ['Cup', 'Mug', 'Fork', 'Hat', 'Bottle', 'Bowl', 'Car', 'Donut', 'Laptop', 'MousePad', 'Pencil',
-                'Plate', 'ScrewDriver', 'WineBottle','Backpack', 'Bag', 'Banana', 'Battery', 'BeanBag', 'Bear',
-                'Book', 'Books', 'Camera','CerealBox', 'Cookie','Hammer', 'Hanger', 'Knife', 'MilkCarton', 'Painting',
-                'PillBottle', 'Plant','PowerSocket', 'PowerStrip', 'PS3', 'PSP', 'Ring', 'Scissors', 'Shampoo', 'Shoes',
-                'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
-                'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick']
+OBJ_CLASSES = ['Cup', 'Mug', 'Fork', 'Hat', 'Bottle', 'Bowl', 'Car', 'Donut', 'Laptop', 'MousePad', 'Pencil']
 
 class TimeoutException(Exception):
     pass
@@ -59,8 +54,6 @@ root_folder = os.path.abspath(os.path.join(base_folder, '..'))
 data_folder = os.path.join(root_folder, DATA_FOLDER)
 grasps_folder = os.path.join(data_folder, 'grasps')
 meshes_folder = os.path.join(data_folder, 'meshes')
-sdf_folder = os.path.join(data_folder, 'scene_sdf')
-makedirs(sdf_folder)
 
 ## Copied from mesh_to_sdf
 def get_unit_spherize_scale(mesh):
@@ -265,10 +258,15 @@ if __name__ == '__main__':
         "--support_scale", default=0.025, help="Scale factor of support mesh."
     )
     args.add_argument("--viz", action="store_true", default=False)
+    args.add_argument("--fps_sample", type=int, default=2048, help="Number of points to sample")
+    args.add_argument("--partial", action="store_true", default=False, 
+                                    help="Whether to use partial observations")
     
     # support = "/root/calibrate_grasp_diffusion/data/grasps/Table/Table_19e80d699bcbd3168821642e9a54505_0.004756380229523233.h5"
     args = args.parse_args()
     support = args.support
+    sdf_folder = os.path.join(data_folder, f'partial_scene_{args.fps_sample}') if args.partial else os.path.join(data_folder, f'scene_{args.fps_sample}')
+    makedirs(sdf_folder)
     
     # load the support mesh
     support_mesh = load_mesh(
@@ -355,55 +353,113 @@ if __name__ == '__main__':
             signed_distance = ray_scene.compute_signed_distance(query_point)
             signed_distance = signed_distance.numpy()
             
-            # ball query
-            # pts = scene.sample_points(pts_density = 2e5)
-            # scene_pts = []
-            # target_index = []
-            # target_center = np.zeros((3, ))
-            # for name, pt in pts.items():
-            #     if name != target_name:
-            #         distance = np.linalg.norm(pt - mos[None, :], axis=1)
-            #         crop_pt = pt[distance < 2 * ball_range]
-            #         target_index.append(np.zeros((len(crop_pt), ), dtype=np.uint8))
-            #     else:
-            #         crop_pt = pt
-            #         target_center = pt.mean(axis=0)
-            #         target_index.append(np.ones((len(crop_pt), ), dtype=np.uint8))
-                
-            #     scene_pts.append(crop_pt)
-            # scene_pts = np.concatenate(scene_pts, axis=0)
-            # target_index = np.concatenate(target_index, axis=0)
-
-            # choose camera intrinsics and extrinsics
-            renderer = SceneRenderer(scene, fov=np.pi / 3, width=640, height=480)
-            trimesh_camera = renderer.get_trimesh_camera()
-            feasible_poses = T[success == 1][collision_free]
-            rand_idx = np.random.choice(len(feasible_poses))
-            camera_pose = feasible_poses[rand_idx] @ np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) # change x right, y up, z back
-            distance = np.random.uniform(low=0.7, high=0.9)
-            camera_pose[:3, 3] = camera_pose[:3, 3] + camera_pose[:3, 2] * distance
-            color, depth, segmentation, scene_pts, target_index = renderer.render(
-                camera_pose=camera_pose, target_id=target_name
-            )
             
-            if segmentation.max() == 0:
-                print("No target object in the scene")
-                continue
+            feasible_poses = T[success == 1][collision_free]
+            
+            # use camera observations
+            if args.partial:
+                # choose camera intrinsics and extrinsics
+                renderer = SceneRenderer(scene, fov=np.pi / 3, width=640, height=480)
+                trimesh_camera = renderer.get_trimesh_camera()
+                
+                # get random camera poses
+                obs_poses = []
+                rand_idx = np.random.choice(len(feasible_poses), 2)
+                for idx in rand_idx:
+                    camera_pose = feasible_poses[idx] @ np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) # change x right, y up, z back
+                    distance = np.random.uniform(low=0.25, high=0.5)
+                    camera_pose[:3, 3] = camera_pose[:3, 3] + camera_pose[:3, 2] * distance
+                    obs_poses.append(camera_pose)
+                
+                # topview
+                topview = np.eye(4)
+                topview[:3, 3] = scene.get_transform(target_name, frame="com")[:3, 3] + np.array([0, 0, np.random.uniform(low=0.15, high=0.35)])
+                obs_poses.append(topview)
+                
+                # render and concatenate pts
+                scene_pts = []
+                target_indexes = []
+                c2ws = []
+                for cam_pose in obs_poses:
+                    color, depth, segmentation, scene_pt, target_index = renderer.render(
+                        camera_pose=cam_pose, target_id=target_name
+                    )
+                    
+                    c2w = cam_pose @ np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+                    c2ws.append(c2w)
+                    
+                    if segmentation.max() == 0:
+                        print("No target object in the scene")
+                        continue
+                    
+                    scene_pt = scene_pt @ c2w.T
+                    scene_pts.append(scene_pt)
+                    target_indexes.append(target_index)
+                    
+                if len(scene_pts) == 0:
+                    continue
+            
+            # use mesh samples
+            else:
+                pts = scene.sample_points(pts_density = 2e5)
+                scene_pts = []
+                target_indexes = []
+                target_center = np.zeros((3, ))
+                for name, pt in pts.items():
+                    if name != target_name:
+                        distance = np.linalg.norm(pt - mos[None, :], axis=1)
+                        crop_pt = pt[distance < 2 * ball_range]
+                        target_indexes.append(np.zeros((len(crop_pt), ), dtype=np.uint8))
+                    else:
+                        crop_pt = pt
+                        target_center = pt.mean(axis=0)
+                        target_indexes.append(np.ones((len(crop_pt), ), dtype=np.uint8))
+                    
+                    scene_pts.append(crop_pt)
 
-            c2w = camera_pose @ np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            scene_pts = scene_pts @ c2w.T
-            target_center = np.sum(scene_pts * target_index[:, None], axis=0) / np.sum(target_index)
+            # find center
+            target_indexes = np.concatenate(target_indexes, axis=0)
+            scene_pts = np.concatenate(scene_pts, axis=0)
+            target_center = np.sum(scene_pts * target_indexes[:, None], axis=0) / np.sum(target_indexes)
             scene_pts = scene_pts[:, :3]
             target_center = target_center[:3]
+            
+            # ball query
+            distance = np.linalg.norm(scene_pts - target_center[None, :], axis=1)
+            scene_pts = scene_pts[distance < 2 * ball_range]
+            target_indexes = target_indexes[distance < 2 * ball_range]
         
             # visualize the scene
             # object_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
             # object_coord.transform(target_T)
-            # cam_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-            # cam_coord.transform(c2w)
+            # for c2w in c2ws:
+            #     cam_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+            #     cam_coord.transform(c2w)
+            #     o3d_mesh.append(cam_coord)
             # o3d_mesh.append(scene_origin)
             # o3d_mesh.append(object_coord)
             # o3d.visualization.draw_geometries(o3d_mesh)
+            
+            # FPS downsample
+            target_pts = scene_pts[target_indexes == 1]
+            surr_pts = scene_pts[target_indexes == 0]
+            
+            if len(target_pts) > args.fps_sample:
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(target_pts)
+                # FPS sample
+                pcd.farthest_point_down_sample(args.fps_sample)
+                target_pts = np.asarray(pcd.points)
+            
+            if len(surr_pts) > args.fps_sample:
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(surr_pts)
+                # FPS sample
+                pcd.farthest_point_down_sample(args.fps_sample)
+                surr_pts = np.asarray(pcd.points)
+                
+            scene_pts = np.concatenate([surr_pts, target_pts], axis=0)
+            target_indexes = np.concatenate([np.zeros((len(surr_pts), )), np.ones((len(target_pts), ))], axis=0)
                         
             # Centralize & Transform
             centralize = np.eye(4)
@@ -465,7 +521,7 @@ if __name__ == '__main__':
             save_file = os.path.join(save_sdf_folder, sdf_mesh)
             sdf_dict = {
                 'scene_pts': scene_pts,
-                "target_index": target_index,
+                "target_index": target_indexes,
                 'xyz': query_pts,
                 'sdf': signed_distance,
                 'grasps': grasps,

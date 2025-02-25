@@ -18,6 +18,7 @@ from se3dif.utils import get_data_src
 
 from se3dif.utils import to_numpy, to_torch, get_grasps_src
 from mesh_to_sdf.surface_point_cloud import get_scan_view, get_hq_scan_view
+from acronym_tools import create_gripper_marker
 from mesh_to_sdf.scan import ScanPointcloud
 import open3d as o3d
 
@@ -503,6 +504,8 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps-len(H_grasps))
             H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
         
+        F_grasps = data['F_grasps']
+        
         pcl = np.concatenate([surr_pts, target_pts], axis=0)
         #######################
         
@@ -525,10 +528,31 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             pcd.points = o3d.utility.Vector3dVector(scene_pts)
 
             grasps = []
-            for grasp in H_grasps:
-                coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-                coord.transform(grasp)
-                grasps.append(coord)
+            for grasp in H_grasps[:5]:
+                # coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+                # coord.transform(grasp)
+                # grasps.append(coord)
+                
+                g = create_gripper_marker()
+                g.apply_transform(grasp)
+                m = o3d.geometry.TriangleMesh()
+                m.vertices = o3d.utility.Vector3dVector(g.vertices)
+                m.triangles = o3d.utility.Vector3iVector(g.faces)
+                m.paint_uniform_color([0, 1, 0])
+                grasps.append(m)
+                
+            for grasp in F_grasps[:5]:
+                # coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+                # coord.transform(grasp)
+                # grasps.append(coord)
+                
+                g = create_gripper_marker()
+                g.apply_transform(grasp)
+                m = o3d.geometry.TriangleMesh()
+                m.vertices = o3d.utility.Vector3dVector(g.vertices)
+                m.triangles = o3d.utility.Vector3iVector(g.faces)
+                m.paint_uniform_color([1, 0, 0])
+                grasps.append(m)
 
             o3d.visualization.draw_geometries([pcd, *grasps])
 
@@ -746,7 +770,7 @@ if __name__ == '__main__':
     # dataset = PartialPointcloudAcronymAndSDFDataset(visualize=False, augmented_rotation=True, one_object=False)
 
     dataset = PointcloudSceneAcronymAndSDFDataset(root_dir='/root/calibrate_grasp_diffusion/data/scene_sdf', visualize=True)
-    dataset[0]
+    dataset[10]
 
     # train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
     # for x,y in train_dataloader:
