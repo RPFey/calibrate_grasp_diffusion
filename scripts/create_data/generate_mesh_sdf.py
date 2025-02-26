@@ -1,4 +1,9 @@
 import os
+# set pyglet to headless mode
+if os.environ.get('PYOPENGL_PLATFORM', '') == 'egl':
+    import pyglet
+    pyglet.options['headless'] = True
+    
 import pickle
 import h5py
 import shutil

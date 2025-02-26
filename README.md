@@ -12,16 +12,9 @@ See reference [1] for additional details.
 
 ## Installation
 
-Create conda environment
+Refer to `build.sh` file
 
-```bash
-conda env create -f environment.yaml
-conda activate se3diff
-python -m pip install -r requirements.txt
-python -m pip install -e .
-```
-
-Prepare data
+## Prepare data
 
 ```bash
 ln -s /mnt/kostas-graid/datasets/boshu/data data
@@ -29,6 +22,12 @@ ln -s /mnt/kostas-graid/datasets/boshu/data data
 
 ## Run
 
+Train using scene point cloud
+
 ```bash
-python scripts/train/train_pointcloud_6d_grasp_diffusion.py
+cd scripts
+python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobject_scene_graspdif --saving_root ../logs/ --data_root ../data/scene_2048/
+
+# Headless mode
+PYOPENGL_PLATFORM=egl python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobject_scene_graspdif --saving_root ../logs/ --data_root ../data/scene_2048/
 ```
