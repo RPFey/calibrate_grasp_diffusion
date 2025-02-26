@@ -1,4 +1,10 @@
 import os
+
+# set pyglet to headless mode
+if os.environ.get('PYOPENGL_PLATFORM', '') == 'egl':
+    import pyglet
+    pyglet.options['headless'] = True
+
 import copy
 import configargparse
 from se3dif.utils import get_root_src
