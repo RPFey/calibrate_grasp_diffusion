@@ -57,27 +57,39 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
     ## Build saving directories
     makedirs(model_dir)
+    
+    summaries_dir = os.path.join(model_dir, 'summaries')
+    checkpoints_dir = os.path.join(model_dir, 'checkpoints')
+    
+    if os.path.exists(checkpoints_dir):
+        # load from the previous checkpoint
+        if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
+            states = torch.load(os.path.join(checkpoints_dir, 'model_current.pth'), map_location=device)
+            model.load_state_dict(states['model_state'], strict=True)
+            for optim, state in zip(optimizers, states['optimizers']):
+                optim.load_state_dict(state)
+            if rank == 0:
+                logging.info("Loaded model from the previous checkpoint")
+            total_steps = states['steps']             
+    else:
+        total_steps = 0
 
     if rank == 0:
-        summaries_dir = os.path.join(model_dir, 'summaries')
         makedirs(summaries_dir)
-
-        checkpoints_dir = os.path.join(model_dir, 'checkpoints')
         makedirs(checkpoints_dir)
 
         exp_name = datetime.datetime.now().strftime("%m.%d.%Y %H:%M:%S")
         writer = SummaryWriter(summaries_dir+ '/' + exp_name)
         logging.basicConfig(filename=os.path.join(summaries_dir, exp_name, 'training.log'), level=logging.INFO)
 
-    total_steps = 0
-    with tqdm(total=len(train_dataloader) * epochs) as pbar:
+    with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
         train_losses = []
         for epoch in range(epochs):
-            if not epoch % epochs_til_checkpoint and epoch and rank == 0:
-                torch.save(model.state_dict(),
-                           os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
-                np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
-                           np.array(train_losses))
+            # if not epoch % epochs_til_checkpoint and epoch and rank == 0:
+            #     torch.save(model.state_dict(),
+            #                os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+            #     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
+            #                np.array(train_losses))
 
             for step, (model_input, gt) in enumerate(train_dataloader):
                 model_input = dict_to_device(model_input, device)
@@ -101,7 +113,15 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
 
                 if not total_steps % steps_til_summary and rank == 0:
-                    torch.save(model.state_dict(),
+                    if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
+                        os.remove(os.path.join(checkpoints_dir, 'model_current.pth'))
+                    
+                    state_dict = {
+                        "model_state": model.state_dict(),
+                        "optimizers": [optim.state_dict() for optim in optimizers],
+                        "steps": total_steps
+                    }
+                    torch.save(state_dict, 
                                os.path.join(checkpoints_dir, 'model_current.pth'))
                     if summary_fn is not None:
                         summary_fn(model, model_input, gt, iter_info, writer, total_steps)
@@ -182,11 +202,16 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                         model.train()
 
                 if (iters_til_checkpoint is not None) and (not total_steps % iters_til_checkpoint) and rank == 0:
-                    torch.save(model.state_dict(),
-                               os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+                    state_dict = {
+                        "model_state": model.state_dict(),
+                        "optimizers": [optim.state_dict() for optim in optimizers],
+                        "steps": total_steps
+                    }
                     
-                    np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
-                               np.array(train_losses))
+                    torch.save(state_dict,
+                               os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+                    # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
+                    #            np.array(train_losses))
 
                 total_steps += 1
                 if max_steps is not None and total_steps==max_steps:
@@ -194,10 +219,13 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
             if max_steps is not None and total_steps==max_steps:
                 break
-
-        torch.save(model.state_dict(),
-                   os.path.join(checkpoints_dir, 'model_final.pth'))
-        np.savetxt(os.path.join(checkpoints_dir, 'train_losses_final.txt'),
-                   np.array(train_losses))
+        
+        state_dict = {
+            "model_state": model.state_dict(),
+            "optimizers": [optim.state_dict() for optim in optimizers],
+            "steps": total_steps
+        }   
+        torch.save(state_dict, os.path.join(checkpoints_dir, 'model_final.pth'))
+        # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_final.txt'), np.array(train_losses))
 
         return model, optimizers

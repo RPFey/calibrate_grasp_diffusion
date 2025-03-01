@@ -1,5 +1,5 @@
 from .denoising_loss import ProjectedSE3DenoisingLoss, SE3DenoisingLoss, DirichletSE3DenoisingLoss, ProjectedSE3DenoisingCOSLoss
-from .sdf_loss import SDFLoss, NLLLoss
+from .sdf_loss import SDFLoss, CELoss
 
 
 def get_losses(args):

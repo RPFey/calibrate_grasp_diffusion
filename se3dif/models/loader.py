@@ -28,11 +28,10 @@ def load_model(args)->models.GraspDiffusionFields:
     elif args['NetworkArch'] == 'PointcloudGraspDiffusion':
         model = load_pointcloud_grasp_diffusion(args)
 
-
     if 'pretrained_model' in args:
         model_path = os.path.join(pretrained_models_dir, args['pretrained_model'], 'model.pth')
-
-        model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        states = torch.load(model_path)
+        model.load_state_dict(states['model_state'])
 
         if args['device'] != 'cpu':
             model = model.to(args['device'], dtype=torch.float32)
@@ -41,9 +40,11 @@ def load_model(args)->models.GraspDiffusionFields:
         load_model_dir = os.path.join(args['saving_folder'], 'checkpoints', 'model_current.pth')
         try:
             if args['device'] == 'cpu':
-                model.load_state_dict(torch.load(load_model_dir, map_location=torch.device('cpu')))
+                states = torch.load(load_model_dir, map_location=torch.device('cpu'))
+                model.load_state_dict(states['model_state'])
             else:
-                model.load_state_dict(torch.load(load_model_dir))
+                states = torch.load(load_model_dir)
+                model.load_state_dict(states['model_state'])
         except:
             pass
 

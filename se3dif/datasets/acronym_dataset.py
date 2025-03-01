@@ -597,6 +597,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         res = {'visual_context': torch.from_numpy(pcl).float(),
                'x_sdf': torch.from_numpy(query_pts).float(),
                'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'x_neg_ene': torch.from_numpy(F_grasps).float(),
                'target_index': torch.from_numpy(target_index).float(),
                'scale': torch.Tensor([self.scale]).float()}
 
