@@ -45,9 +45,9 @@ def run_with_timeout(func, timeout, *args, **kwargs):
     try:
         result = func(*args, **kwargs)
     except TimeoutException:
-        result = -1  # Handle timeout case
+        result = False  # Handle timeout case
     except np.linalg.LinAlgError as e:
-        result = -1
+        result = False
     finally:
         signal.alarm(0)  # Disable alarm
     return result
@@ -287,6 +287,7 @@ if __name__ == '__main__':
             target_mesh = load_mesh(os.path.join(grasp_cls_folder, filename), mesh_root_dir=args.mesh_root)
             if not isinstance(target_mesh, trimesh.Trimesh):
                 continue
+            
             extents = target_mesh.bounding_box.extents
             ball_range = np.max(extents) * 1.5
             
@@ -298,8 +299,8 @@ if __name__ == '__main__':
             scene = PyrenderScene()
             scene.add_object("support_object", support_mesh, pose=np.eye(4), support=True)
             result = run_with_timeout(scene.place_object, 10, target_name, target_mesh)
-            if result == -1:
-                print("Failed to place object")
+            if not result:
+                print("Failed to place target object")
                 continue
             
             trials = 0
@@ -315,8 +316,8 @@ if __name__ == '__main__':
                     scale = random.random() + 0.5
                     random_mesh.apply_scale(scale)
                     result = run_with_timeout(scene.place_object, 10, f"obj{len(scene._objects)}", random_mesh)
-                    if result == -1:
-                        print("Failed to place object")
+                    if not result:
+                        print(f"Failed to place {len(scene._objects)}/5 object")
                         continue
                     print(trials)
                     trials += 1
