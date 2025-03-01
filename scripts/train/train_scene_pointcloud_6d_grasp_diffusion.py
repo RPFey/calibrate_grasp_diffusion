@@ -76,9 +76,9 @@ def main(opt):
     train_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,
                                                                     num_scene_pts=args["num_scene_points"], num_target_pts=args["num_target_points"])
     train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
-    test_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,
+    test_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,  split='test',
                                                                 num_scene_pts=args["num_scene_points"], num_target_pts=args["num_target_points"])
-    test_dataloader = DataLoader(test_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True, drop_last=True)
 
     ## Model
     args['device'] = device

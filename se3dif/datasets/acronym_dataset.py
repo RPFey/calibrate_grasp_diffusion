@@ -443,25 +443,35 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                                    'PillBottle', 'Plant','PowerSocket', 'PowerStrip', 'PS3', 'PSP', 'Ring', 'Scissors', 'Shampoo', 'Shoes',
                                    'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
                                    'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
-                        visualize = False, num_grasps = 200, num_scene_pts = 2048, num_target_pts = 1024):
-        class_type = ['Cup']
+                        visualize = False, split = 'train', num_grasps = 200, num_scene_pts = 2048, num_target_pts = 1024, seed = 42):
+        # class_type = ['Cup']
         self.class_type = class_type
         self.visualize = visualize
         self.num_grasps = num_grasps
         self.num_scene_pts = num_scene_pts
         self.num_target_pts = num_target_pts
         self.scale = 8.
+        self.split = split
 
         self.files = []
         for cls in self.class_type:
             self.files += glob.glob(root_dir + '/' + cls + '/*.npz')
+            
+        rng = np.random.RandomState(seed)
+        rng.shuffle(self.files)
+        if self.split == 'train':
+            self.files = self.files[:int(0.9*len(self.files))]
+        elif self.split == 'test':
+            self.files = self.files[int(0.9*len(self.files)):]
 
     def __len__(self):
         return len(self.files)
 
     def _get_item(self, index):
         ## Load Files ##
-        data = np.load(self.files[index])
+        filename = self.files[index]
+        cls_name = filename.split('/')[-2]
+        data = np.load(filename)
         scene_pts = data['scene_pts']
         query_pts = data['xyz']
         sdf = data['sdf']
@@ -494,20 +504,37 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         elif len(surr_pts) < self.num_scene_pts:
             rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts-len(surr_pts))
             surr_pts = np.concatenate([surr_pts, surr_pts[rix, ...]], axis=0)
+            
+        pcl = np.concatenate([surr_pts, target_pts], axis=0)
+        pcl -= mean
         
         # sample grasps to num_grasps
+        # downsample grasps for training 
         H_grasps = data['grasps']
-        if len(H_grasps) > self.num_grasps:
-            rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps)
-            H_grasps = H_grasps[rix, ...]
-        elif len(H_grasps) < self.num_grasps:
-            rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps-len(H_grasps))
-            H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
-        
         F_grasps = data['F_grasps']
         
-        pcl = np.concatenate([surr_pts, target_pts], axis=0)
+        if self.split == 'train': 
+            if len(H_grasps) > self.num_grasps:
+                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps)
+                H_grasps = H_grasps[rix, ...]
+            elif len(H_grasps) < self.num_grasps:
+                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps-len(H_grasps))
+                H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
+            
+            if len(F_grasps) > self.num_grasps:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_grasps)
+                F_grasps = F_grasps[rix, ...]
+            elif len(F_grasps) < self.num_grasps:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_grasps-len(F_grasps))
+                F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
         #######################
+        
+        # do scaling here
+        pcl = pcl * self.scale
+        query_pts = query_pts * self.scale
+        H_grasps[..., :3, -1] = H_grasps[..., :3, -1] * self.scale
+        F_grasps[..., :3, -1] = F_grasps[..., :3, -1] * self.scale
+        sdf = sdf * self.scale
         
         ## Random rotation ##
         # R = special_ortho_group.rvs(3)
@@ -557,19 +584,23 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             o3d.visualization.draw_geometries([pcd, *grasps])
 
         # shape 
-        # visual context - (N ,3); N = 1000 in original format
+        # visual context - (N, 3); N = 1000 in original format
         # x_sdf - (M, 3); M = 1000
         # x_ene_pos - (K, 4, 4); K = 200
         # scale - (1)
 
-        res = {'visual_context': torch.from_numpy(pcl).float() * self.scale,
-               'x_sdf': torch.from_numpy(query_pts).float() * self.scale,
-               'x_ene_pos': torch.from_numpy(H_grasps).float(),
-               'scale': torch.Tensor([self.scale]).float()}
+        # concatenate target index
+        target_index = np.zeros((len(pcl), 1))
+        target_index[-self.num_target_pts:, :] = 1
+        # pcl = np.concatenate([pcl, target_index[:, np.newaxis]], axis=1)
         
-        res['x_ene_pos'][:, :3, -1] *= self.scale
+        res = {'visual_context': torch.from_numpy(pcl).float(),
+               'x_sdf': torch.from_numpy(query_pts).float(),
+               'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'target_index': torch.from_numpy(target_index).float(),
+               'scale': torch.Tensor([self.scale]).float()}
 
-        return res, {'sdf': torch.from_numpy(sdf).float()}
+        return res, {'sdf': torch.from_numpy(sdf).float(), "class_name": cls_name}
 
     def __getitem__(self, index):
         'Generates one sample of data'

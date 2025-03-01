@@ -74,7 +74,7 @@ def main(opt):
     train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
     test_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'],
                                                                   test_files=train_dataset.test_grasp_files)
-    test_dataloader = DataLoader(test_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True, drop_last=True)
 
     ## Model
     args['device'] = device

@@ -104,7 +104,10 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     v_enc_params = params['encoder']
     points_params = params['points']
     # vision encoder
-    vision_encoder = models.vision_encoder.VNNPointnet2(out_features=v_enc_params['latent_size'], device=device)
+    # Energy Based Model
+    num_scene_points = args.get('num_scene_points', -1)
+    in_features = 4 if num_scene_points > 0 else 3
+    vision_encoder = models.vision_encoder.VNNPointnet2(out_features=v_enc_params['latent_size'], device=device, in_features=in_features)
     # Geometry encoder
     geometry_encoder = models.geometry_encoder.map_projected_points
     # Feature Encoder
@@ -129,12 +132,8 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
                             scale=np.array(points_params['scale']))
     else:
         points = models.points.get_3d_pts(n_points=points_params['n_points'])
-    # Energy Based Model
-    num_scene_points = args.get('num_scene_points', -1)
-    if num_scene_points > 0:
-        in_dim = points_params['n_points'] * (feat_enc_params['out_dim'] + 1)
-    else:
-        in_dim = points_params['n_points'] * feat_enc_params['out_dim']
+        
+    in_dim = points_params['n_points'] * feat_enc_params['out_dim']
 
     # get nenergy net final distribution
     hidden_dim = 512
@@ -153,7 +152,7 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 2),
-            Exp(),
+            nn.ReLU(),
         )
     else:
         raise ValueError(f"Unknown distribution: {distribution}")

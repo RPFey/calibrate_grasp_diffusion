@@ -21,7 +21,7 @@ class VNNPointnet2(nn.Module):
         if out_features%3 !=0:
             print('This might break. The module expects a feature to be a multiple of 3.')
 
-        self.vnn_resnet = VNN_ResnetPointnet(c_dim=int(out_features/3), device=device)
+        self.vnn_resnet = VNN_ResnetPointnet(c_dim=int(out_features/3), dim=in_features, device=device)
 
     def forward(self, pc):
 
@@ -44,7 +44,7 @@ class VNN_ResnetPointnet(nn.Module):
         self.k = k
         self.meta_output = meta_output
 
-        self.conv_pos = VNLinearLeakyReLU(3, 128, negative_slope=0.0, share_nonlinearity=False, use_batchnorm=False)
+        self.conv_pos = VNLinearLeakyReLU(dim, 128, negative_slope=0.0, share_nonlinearity=False, use_batchnorm=False)
         self.fc_pos = VNLinear(128, 2 * hidden_dim)
         self.block_0 = VNResnetBlockFC(2 * hidden_dim, hidden_dim)
         self.block_1 = VNResnetBlockFC(2 * hidden_dim, hidden_dim)
@@ -72,11 +72,10 @@ class VNN_ResnetPointnet(nn.Module):
         # mean = get_graph_mean(p, k=self.k)
         # mean = p_trans.mean(dim=-1, keepdim=True).expand(p_trans.size())
         feat = get_graph_feature_cross(p, k=self.k, device=self.device)
+        
         net = self.conv_pos(feat)
         net = self.pool(net, dim=-1)
-
         net = self.fc_pos(net)
-
         net = self.block_0(net)
         pooled = self.pool(net, dim=-1, keepdim=True).expand(net.size())
         net = torch.cat([net, pooled], dim=1)

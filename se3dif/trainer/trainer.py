@@ -13,6 +13,37 @@ import logging
 
 # log to .log file
 
+def compute_difference(grasp_prediction: torch.Tensor, grasp_gt: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the difference between the predicted and ground truth grasps.
+    
+    Args:
+        grasp_prediction (torch.Tensor): Predicted grasp poses.
+            shape (B, N, 4, 4)
+        grasp_gt (torch.Tensor): Ground truth grasp poses.
+            shape (B, N, 4, 4)
+    Returns:
+        torch.Tensor: Difference between the predicted and ground truth grasps.
+            shape (B, N, N, 2); (angular, translation)
+    """
+    grasp_prediction_rot = grasp_prediction[:, :, None, :3, :3]
+    grasp_gt_rot = grasp_gt[:, None, :, :3, :3]
+    
+    # compute the angular distance
+    R_diff = torch.matmul(grasp_prediction_rot, grasp_gt_rot.transpose(3, 4)) # (B, N, N, 3, 3)
+    R_diff = torch.clamp(R_diff, -1, 1)
+    delta_R = ( 
+                torch.sum(R_diff[..., list(range(3)), list(range(3))], dim = -1) - 1
+        ) / 2
+    delta_R = torch.clamp(delta_R, -1, 1)
+    angular_distance = torch.acos(delta_R) # (B, N, N)
+    
+    # compute translation distance
+    t_diff = grasp_prediction[:, :, None, :3, 3] - grasp_gt[:, None, :, :3, 3] # (B, N, N, 3)
+    translation_distance = torch.norm(t_diff, dim=-1) # (B, N, N)
+    difference = torch.stack([angular_distance, translation_distance], dim=-1) # (B, N, N, 2)
+    
+    return difference
 
 def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
           summary_fn=None, iters_til_checkpoint=None, val_dataloader=None, clip_grad=False, val_loss_fn=None,
@@ -98,35 +129,62 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     print("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - forward_start_time))
 
                     if val_dataloader is not None:
-                        print("Running validation set...")
+                        # sample poses 
+                        from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
+    
                         with torch.no_grad():
                             model.eval()
+                            
+                            # compute val loss
                             val_losses = defaultdict(list)
-                            for val_i, (model_input, gt) in enumerate(val_dataloader):
+                            for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
                                 model_input = dict_to_device(model_input, device)
                                 gt = dict_to_device(gt, device)
 
                                 # model_output = model(model_input)
                                 # val_loss = val_loss_fn(model_output, gt, val=True)
                                 val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
+                                
+                                # sample grasps
+                                H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
+                                num_grasps = H_grasps.shape[1]
+                                generator = Grasp_AnnealedLD(model, batch=20, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
+                                H_sampled = generator.sample()[0] # (B, N, 4, 4)
+                                H_sampled = H_sampled.unsqueeze(0)
+                            
+                                # compute the angular and translation distance between H and H_grasps
+                                difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
+                                matches = torch.min(difference, dim=2)[0]
 
                                 for name, value in val_loss.items():
                                     val_losses[name].append(value.cpu().numpy())
-
-                                if val_i == batches_per_validation:
-                                    break
-
+                                    
+                                val_losses["avg_angular"].append(matches[:, :, 0].mean().item())
+                                val_losses["avg_translation"].append(matches[:, :, 1].mean().item())
+                                val_losses["acc"].append(
+                                    torch.sum(
+                                        torch.bitwise_and(matches[:, :, 0] < 5 * np.pi / 180, matches[:, :, 1] < 0.05)
+                                    ).item()
+                                )
+                                val_losses['total'].append(num_grasps)
+                                  
                         for loss_name, loss in val_losses.items():
-                            single_loss = np.mean(loss)
-                            if summary_fn is not None:
-                                summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
-                                writer.add_scalar('val_' + loss_name, single_loss, total_steps)
+                            if loss_name in ['total', 'acc']:
+                                if loss_name == 'acc':
+                                    acc_rate = sum(val_losses['acc']) / sum(val_losses['total'])
+                                    writer.add_scalar('val_acc', acc_rate, total_steps)
+                            else:
+                                single_loss = np.mean(loss)
+                                if summary_fn is not None:
+                                    summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
+                                    writer.add_scalar('val_' + loss_name, single_loss, total_steps)
 
                         model.train()
 
                 if (iters_til_checkpoint is not None) and (not total_steps % iters_til_checkpoint) and rank == 0:
                     torch.save(model.state_dict(),
                                os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+                    
                     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
                                np.array(train_losses))
 

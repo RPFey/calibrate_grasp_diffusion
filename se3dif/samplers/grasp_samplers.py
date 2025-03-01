@@ -167,7 +167,7 @@ class Grasp_AnnealedLD():
         ## 2.Langevin Dynamics (We evolve the data as [R3, SO(3)] pose)##
         Ht = H0
         if save_path:
-            trj_H = Ht[None,...]
+            trj_H = Ht[None, ...]
         
         for t in range(self.T):
             Ht = self._step(Ht, t, noise_off=self.deterministic)

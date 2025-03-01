@@ -22,9 +22,10 @@ def load_experiment_specifications(experiment_directory):
 def dict_to_device(ob, device):
     if isinstance(ob, collections.abc.Mapping):
         return {k: dict_to_device(v, device) for k, v in ob.items()}
-    else:
+    elif isinstance(ob, torch.Tensor):
         return ob.to(device)
-
+    else:
+        return ob
 
 def to_numpy(x):
     return x.detach().cpu().numpy()

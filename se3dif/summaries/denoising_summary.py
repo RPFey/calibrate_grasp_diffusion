@@ -17,7 +17,11 @@ def denoising_summary(model, model_input, ground_truth, info, writer, iter, pref
 
     ## 1. visualize generated grasps ##
     model.eval()
-    model.set_latent(observation[:1,...], batch=batch)
+    target_index = model_input.get('target_index', None)
+    if target_index is not None:
+        target_index = target_index[:1, ...]
+        
+    model.set_latent(observation[:1, ...], target_index=target_index)
     generator = Grasp_AnnealedLD(model, batch=batch, T=30, T_fit=50, device=observation.device)
     H = generator.sample()[0]
 

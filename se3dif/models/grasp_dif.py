@@ -78,12 +78,11 @@ class GraspDiffusionFields(nn.Module):
         self.num_scene_points = num_scene_points
         self.distribution = distribution
 
-    def set_latent(self, O, batch = 1):
-        if self.num_scene_points < 0:
-            self.z = self.vision_encoder(O.squeeze(1))
-        else:
-            self.z = self.vision_encoder(O[:, self.num_scene_points:, :])
-            self.env_z = self.vision_encoder(O)
+    def set_latent(self, O, target_index = None):
+        if target_index is not None:
+            O = torch.cat([O, target_index], dim=-1)
+            
+        self.z = self.vision_encoder(O)
         
     def forward(self, H, k):
         logits = self.get_logits(H, k)
@@ -114,12 +113,6 @@ class GraspDiffusionFields(nn.Module):
         ## 2. Get Features
         psi = self.feature_encoder(p, k_ext, z_ext)
         
-        if self.num_scene_points > 0:
-            env_z_ext = self.env_z.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, self.z.shape[-1])
-            env_z_ext = env_z_ext.unsqueeze(1).repeat(1, p.shape[1], 1)
-            env_psi = self.feature_encoder(p, k_ext, env_z_ext)
-            psi = torch.cat((psi, env_psi[..., [0]]), dim=-1)
-        
         ## 3. Flat and get energy
         psi_flatten = psi.reshape(psi.shape[0], -1)
         logits = self.decoder(psi_flatten)
@@ -137,7 +130,7 @@ class GraspDiffusionFields(nn.Module):
         """
         k = torch.rand_like(x[..., 0])
         
-        latent_vecs = self.env_z if hasattr(self, 'env_z') else self.z
+        latent_vecs = self.z
         repeat_times = x.shape[0] // latent_vecs.shape[0]
         latent_vecs = latent_vecs.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, latent_vecs.shape[-1])
         psi = self.feature_encoder(x, k, latent_vecs)

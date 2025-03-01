@@ -33,7 +33,8 @@ class LossDictionary():
         
         # set the visual context for the model
         c = model_input['visual_context']
-        model.set_latent(c)
+        target_index = model_input.get('target_index', None)    
+        model.set_latent(c, target_index=target_index)
         
         for field in self.fields:
             loss_fn_k = self.loss_dict[field]
