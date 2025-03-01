@@ -138,8 +138,8 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     # get nenergy net final distribution
     hidden_dim = 512
     
-    distribution = args.get('distribution', 'bernoulli')
-    if distribution == 'bernoulli':
+    distribution = args.get('distribution', 'direct')
+    if distribution in ['bernoulli', 'direct']:
         energy_net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),

@@ -89,6 +89,8 @@ class GraspDiffusionFields(nn.Module):
         
         if self.distribution == 'bernoulli':
             e = torch.sigmoid(logits)
+        elif self.distribution == 'direct':
+            e = logits
         elif self.distribution == 'dirichlet':
             dist = torch.distributions.Dirichlet(logits)
             # compute the log likelihood of the positive label
