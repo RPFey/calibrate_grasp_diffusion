@@ -31,3 +31,17 @@ python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobjec
 # Headless mode
 PYOPENGL_PLATFORM=egl python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobject_scene_graspdif --saving_root ../logs/ --data_root ../data/scene_2048/
 ```
+
+## Experiment
+
+```bash
+##############
+# Ablation 1 #
+##############
+
+# Complete Scene 
+PYOPENGL_PLATFORM=egl python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobject_scene_graspdif --saving_root ../logs/ --data_root ../data/scene_2048/
+
+# Only Targets Point Cloud.
+PYOPENGL_PLATFORM=egl python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobject_partialp_graspdif --saving_root ../logs/ --data_root ../data/scene_2048/
+```

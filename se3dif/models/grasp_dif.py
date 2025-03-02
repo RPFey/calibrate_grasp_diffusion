@@ -79,8 +79,8 @@ class GraspDiffusionFields(nn.Module):
         self.distribution = distribution
 
     def set_latent(self, O, target_index = None):
-        if target_index is not None:
-            O = torch.cat([O, target_index], dim=-1)
+        if self.num_scene_points > 0:
+            O = torch.cat([O, target_index], dim=-1) 
             
         self.z = self.vision_encoder(O)
         
