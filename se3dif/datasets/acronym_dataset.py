@@ -529,13 +529,6 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                 F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
         #######################
         
-        # do scaling here
-        pcl = pcl * self.scale
-        query_pts = query_pts * self.scale
-        H_grasps[..., :3, -1] = H_grasps[..., :3, -1] * self.scale
-        F_grasps[..., :3, -1] = F_grasps[..., :3, -1] * self.scale
-        sdf = sdf * self.scale
-        
         ## Random rotation ##
         # R = special_ortho_group.rvs(3)
         # H = np.eye(4)
@@ -548,18 +541,22 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         # pcl = np.einsum('mn,bn->bm',R, pcl)
         # query_pts = np.einsum('mn,bn->bm',R, query_pts)
         # H_grasps = np.einsum('mn,bnk->bmk', H, H_grasps)
+        
+        # concatenate target index
+        target_index = np.zeros((len(pcl), 1))
+        target_index[-self.num_target_pts:, :] = 1
 
         # Visualize
         if self.visualize:
             pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(scene_pts)
+            pcd.points = o3d.utility.Vector3dVector(pcl)
+            colors = np.zeros((len(pcl), 3))
+            colors[target_index[:, 0] == 1, 2] = 1
+            colors[target_index[:, 0] == 0, 0] = 1
+            pcd.colors = o3d.utility.Vector3dVector(colors)
 
             grasps = []
             for grasp in H_grasps[:5]:
-                # coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-                # coord.transform(grasp)
-                # grasps.append(coord)
-                
                 g = create_gripper_marker()
                 g.apply_transform(grasp)
                 m = o3d.geometry.TriangleMesh()
@@ -569,10 +566,6 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                 grasps.append(m)
                 
             for grasp in F_grasps[:5]:
-                # coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-                # coord.transform(grasp)
-                # grasps.append(coord)
-                
                 g = create_gripper_marker()
                 g.apply_transform(grasp)
                 m = o3d.geometry.TriangleMesh()
@@ -582,17 +575,19 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                 grasps.append(m)
 
             o3d.visualization.draw_geometries([pcd, *grasps])
+            
+        # do scaling here
+        pcl = pcl * self.scale
+        query_pts = query_pts * self.scale
+        H_grasps[..., :3, -1] = H_grasps[..., :3, -1] * self.scale
+        F_grasps[..., :3, -1] = F_grasps[..., :3, -1] * self.scale
+        sdf = sdf * self.scale
 
         # shape 
         # visual context - (N, 3); N = 1000 in original format
         # x_sdf - (M, 3); M = 1000
         # x_ene_pos - (K, 4, 4); K = 200
         # scale - (1)
-
-        # concatenate target index
-        target_index = np.zeros((len(pcl), 1))
-        target_index[-self.num_target_pts:, :] = 1
-        # pcl = np.concatenate([pcl, target_index[:, np.newaxis]], axis=1)
         
         res = {'visual_context': torch.from_numpy(pcl).float(),
                'x_sdf': torch.from_numpy(query_pts).float(),
@@ -801,7 +796,7 @@ if __name__ == '__main__':
     # ## Pointcloud conditioned dataset
     # dataset = PartialPointcloudAcronymAndSDFDataset(visualize=False, augmented_rotation=True, one_object=False)
 
-    dataset = PointcloudSceneAcronymAndSDFDataset(root_dir='/root/calibrate_grasp_diffusion/data/scene_sdf', visualize=True)
+    dataset = PointcloudSceneAcronymAndSDFDataset(root_dir='/root/calibrate_grasp_diffusion/data/scene_2048', visualize=True)
     dataset[10]
 
     # train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
