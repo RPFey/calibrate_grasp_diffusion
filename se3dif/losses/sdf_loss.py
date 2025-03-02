@@ -43,14 +43,14 @@ class CELoss():
         loss_dict = dict()
         label = model_input["x_ene_pos"].reshape(-1, 4, 4)
         n_label = model_input["x_neg_ene"].reshape(-1, 4, 4) # 
+        pos_num = label.shape[0]
         
-        final_t = torch.ones((label.shape[0], )).to(label.device) * (1 / self.T) + self.eps
-        pos_logit = model(label, final_t)
-        l_pos = pos_logit.mean()
+        labels = torch.cat((label, n_label), dim=0)
+        final_t = torch.ones((labels.shape[0], )).to(labels.device) * (1 / self.T) + self.eps
+        logprob = model(labels, final_t).view(-1)
         
-        final_t = torch.ones((n_label.shape[0], )).to(n_label.device) * (1 / self.T) + self.eps
-        neg_logit = model(n_label, final_t)
-        l_neg = (1 - neg_logit).mean()
+        l_pos = -1 * logprob[:pos_num].mean()
+        l_neg = -1 * torch.log( 1 + self.eps - torch.exp(logprob[pos_num:] - self.eps) ).mean()
 
         ## Total Loss
         loss_dict[self.field] = l_pos + l_neg
