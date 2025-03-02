@@ -135,7 +135,7 @@ class Grasp_AnnealedLD():
                 ## 2. Compute energy gradient ##
                 phi0_in = phi0.detach().requires_grad_(True)
                 H_in = SO3_R3().exp_map(phi0_in).to_matrix()
-                t_in = phase*torch.ones_like(H_in[:,0,0])
+                t_in = phase * torch.ones_like(H_in[:,0,0])
                 e = self.model(H_in, t_in)
                 d_phi = torch.autograd.grad(e.sum(), phi0_in)[0]
 
@@ -182,8 +182,8 @@ class Grasp_AnnealedLD():
         # compute final score 
         with torch.no_grad():
             eps = 1e-3
-            phase = (1 / (self.T)) + eps
-            t_in = phase*torch.ones_like(Ht[:, 0, 0])
+            phase = (1 / self.T) + eps
+            t_in = phase * torch.ones_like(Ht[:, 0, 0])
             energy = self.model(Ht, t_in)
             
         if save_path:

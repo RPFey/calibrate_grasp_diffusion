@@ -16,8 +16,6 @@ def get_losses(args):
         loss_fns['denoise'] = SE3DenoisingLoss()
     if 'dirichlet_denoising_loss' in losses:
         loss_fns['denoise'] = DirichletSE3DenoisingLoss()
-    if 'nll_loss' in losses:
-        loss_fns['nll'] = NLLLoss()
 
     loss_dict = LossDictionary(loss_dict=loss_fns)
     return loss_dict

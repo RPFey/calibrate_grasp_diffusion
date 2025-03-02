@@ -8,6 +8,7 @@ from collections import defaultdict
 
 from se3dif.utils import makedirs, dict_to_device
 from torch.utils.tensorboard import SummaryWriter
+from torchmetrics.classification import BinaryAveragePrecision
 from tqdm.autonotebook import tqdm
 import logging
 
@@ -151,9 +152,10 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     if val_dataloader is not None:
                         # sample poses 
                         from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
-    
+
                         with torch.no_grad():
                             model.eval()
+                            bap = BinaryAveragePrecision(thresholds=None)
                             
                             # compute val loss
                             val_losses = defaultdict(list)
@@ -161,8 +163,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 model_input = dict_to_device(model_input, device)
                                 gt = dict_to_device(gt, device)
 
-                                # model_output = model(model_input)
-                                # val_loss = val_loss_fn(model_output, gt, val=True)
+                                # The visual context is already set in the loss function here ! 
                                 val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
                                 
                                 # sample grasps
@@ -175,6 +176,22 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 # compute the angular and translation distance between H and H_grasps
                                 difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
                                 matches = torch.min(difference, dim=2)[0]
+                                
+                                # Binary Classfication AP
+                                if model.distribution != 'direct':
+                                    p_pose, f_pose = model_input["x_ene_pos"], model_input["x_ene_pos"]
+                                    final_t = torch.ones((p_pose.shape[1], )).to(p_pose.device) * (1 / generator.T) + 1e-3
+                                    pos_logit = model(p_pose[0], final_t)
+                                    pos_prob = torch.exp(pos_logit)
+                                    
+                                    final_t = torch.ones((f_pose.shape[1], )).to(p_pose.device) * (1 / generator.T) + 1e-3
+                                    neg_logit = model(f_pose[0], final_t)
+                                    neg_prob = torch.exp(neg_logit)
+                                    
+                                    pred = torch.cat([pos_prob, neg_prob], dim=0).squeeze(1)
+                                    label = torch.ones(pred.shape[0]).to(pred.device).long()
+                                    label[neg_prob.shape[1]:] = 0
+                                    bap(pred, label)                                    
 
                                 for name, value in val_loss.items():
                                     val_losses[name].append(value.cpu().numpy())
@@ -198,6 +215,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 if summary_fn is not None:
                                     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
                                     writer.add_scalar('val_' + loss_name, single_loss, total_steps)
+                                    
+                        writer.add_scalar('val_BAP', bap.compute(), total_steps)
 
                         model.train()
 
