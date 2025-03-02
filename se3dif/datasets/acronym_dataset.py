@@ -497,22 +497,24 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             target_pts = np.concatenate([target_pts, target_pts[rix, ...]], axis=0)
         mean = np.mean(target_pts, 0)
 
-        surr_pts = scene_pts[target_index == 0, :]
-        if len(surr_pts) > self.num_scene_pts:
-            rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts)
-            surr_pts = surr_pts[rix, ...]
-        elif len(surr_pts) < self.num_scene_pts:
-            rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts-len(surr_pts))
-            surr_pts = np.concatenate([surr_pts, surr_pts[rix, ...]], axis=0)
-            
-        pcl = np.concatenate([surr_pts, target_pts], axis=0)
+        if self.num_scene_pts > 0:
+            surr_pts = scene_pts[target_index == 0, :]
+            if len(surr_pts) > self.num_scene_pts:
+                rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts)
+                surr_pts = surr_pts[rix, ...]
+            elif len(surr_pts) < self.num_scene_pts:
+                rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts-len(surr_pts))
+                surr_pts = np.concatenate([surr_pts, surr_pts[rix, ...]], axis=0)
+            pcl = np.concatenate([surr_pts, target_pts], axis=0)
+        else:
+            pcl = target_pts
         pcl -= mean
         
         # sample grasps to num_grasps
-        # downsample grasps for training 
         H_grasps = data['grasps']
         F_grasps = data['F_grasps']
         
+        # downsample grasps for training 
         if self.split == 'train': 
             if len(H_grasps) > self.num_grasps:
                 rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps)
