@@ -85,6 +85,7 @@ class GraspDiffusionFields(nn.Module):
         self.z = self.vision_encoder(O)
         
     def forward(self, H, k):
+        """ Predict the energy (Log Probality) of the current samples. """
         logits = self.get_logits(H, k)
         
         if self.distribution == 'bernoulli':
