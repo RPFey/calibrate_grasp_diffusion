@@ -89,7 +89,7 @@ class GraspDiffusionFields(nn.Module):
         logits = self.get_logits(H, k)
         
         if self.distribution == 'bernoulli':
-            e = torch.log(torch.sigmoid(logits))
+            e = torch.log(torch.sigmoid(logits) + 1e-6)
         elif self.distribution == 'direct':
             e = logits
         elif self.distribution == 'dirichlet':

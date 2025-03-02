@@ -33,24 +33,24 @@ class SDFLoss():
 
 
 class CELoss():
-    def __init__(self, field='ce', eps=1e-6):
+    def __init__(self, field='ce', eps=1e-3, T = 30):
         self.field = field
         self.eps = eps
+        self.T = T
 
-    def __call__(self, model:models.GraspDiffusionFields, model_input):
+    def __call__(self, model:models.GraspDiffusionFields, model_input,
+                    ground_truth, val=False):
         loss_dict = dict()
         label = model_input["x_ene_pos"].reshape(-1, 4, 4)
         n_label = model_input["x_neg_ene"].reshape(-1, 4, 4) # 
-            
-        ## Compute model output ##
-        random_t = torch.rand((label.shape[0], ), device=label.device) * (1. - self.eps) + self.eps
-        pos_logit = model.get_logits(label, random_t)
-        pos_prob = torch.sigmoid(pos_logit)
-        l_pos = torch.log(pos_prob + self.eps).mean()
         
-        neg_logit = model.get_logits(n_label, random_t)
-        neg_prob = torch.sigmoid(neg_logit)
-        l_neg = torch.log(1 - neg_prob).mean()
+        final_t = torch.ones((label.shape[0], )).to(label.device) * (1 / self.T) + self.eps
+        pos_logit = model(label, final_t)
+        l_pos = pos_logit.mean()
+        
+        final_t = torch.ones((n_label.shape[0], )).to(n_label.device) * (1 / self.T) + self.eps
+        neg_logit = model(n_label, final_t)
+        l_neg = (1 - neg_logit).mean()
 
         ## Total Loss
         loss_dict[self.field] = l_pos + l_neg

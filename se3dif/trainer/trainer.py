@@ -62,16 +62,15 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
     summaries_dir = os.path.join(model_dir, 'summaries')
     checkpoints_dir = os.path.join(model_dir, 'checkpoints')
     
-    if os.path.exists(checkpoints_dir):
+    if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
         # load from the previous checkpoint
-        if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
-            states = torch.load(os.path.join(checkpoints_dir, 'model_current.pth'), map_location=device)
-            model.load_state_dict(states['model_state'], strict=True)
-            for optim, state in zip(optimizers, states['optimizers']):
-                optim.load_state_dict(state)
-            if rank == 0:
-                logging.info("Loaded model from the previous checkpoint")
-            total_steps = states['steps']             
+        states = torch.load(os.path.join(checkpoints_dir, 'model_current.pth'), map_location=device)
+        model.load_state_dict(states['model_state'], strict=True)
+        for optim, state in zip(optimizers, states['optimizers']):
+            optim.load_state_dict(state)
+        if rank == 0:
+            logging.info("Loaded model from the previous checkpoint")
+        total_steps = states['steps']             
     else:
         total_steps = 0
 
@@ -185,7 +184,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                     pos_prob = torch.exp(pos_logit)
                                     
                                     final_t = torch.ones((f_pose.shape[1], )).to(p_pose.device) * (1 / generator.T) + 1e-3
-                                    neg_logit = model.get_logits(f_pose[0], final_t)
+                                    neg_logit = model(f_pose[0], final_t)
                                     neg_prob = torch.exp(neg_logit)
                                     
                                     pred = torch.cat([pos_prob, neg_prob], dim=0).squeeze(1)
