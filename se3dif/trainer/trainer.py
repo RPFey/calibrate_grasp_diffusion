@@ -168,13 +168,14 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 # sample grasps
                                 H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
                                 num_grasps = H_grasps.shape[1]
-                                generator = Grasp_AnnealedLD(model, batch=20, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
+                                generator = Grasp_AnnealedLD(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
                                 H_sampled = generator.sample()[0] # (B, N, 4, 4)
                                 H_sampled = H_sampled.unsqueeze(0)
                             
                                 # compute the angular and translation distance between H and H_grasps
                                 difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
-                                matches = torch.min(difference, dim=2)[0]
+                                acc_matches = torch.min(difference, dim=2)[0]
+                                recall_matches = torch.min(difference, dim=1)[0]
                                 
                                 # Binary Classfication AP
                                 if model.distribution != 'direct':
@@ -195,11 +196,19 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 for name, value in val_loss.items():
                                     val_losses[name].append(value.cpu().numpy())
                                     
-                                val_losses["avg_angular"].append(matches[:, :, 0].mean().item())
-                                val_losses["avg_translation"].append(matches[:, :, 1].mean().item())
+                                val_losses["acc_avg_angular"].append(acc_matches[:, :, 0].mean().item())
+                                val_losses["acc_avg_translation"].append(acc_matches[:, :, 1].mean().item())
                                 val_losses["acc"].append(
                                     torch.sum(
-                                        torch.bitwise_and(matches[:, :, 0] < 5 * np.pi / 180, matches[:, :, 1] < 0.05)
+                                        torch.bitwise_and(acc_matches[:, :, 0] < 5 * np.pi / 180, acc_matches[:, :, 1] < 0.05)
+                                    ).item()
+                                )
+                                
+                                val_losses['rec_avg_angular'].append(recall_matches[:, :, 0].mean().item())
+                                val_losses['rec_avg_translation'].append(recall_matches[:, :, 1].mean().item())
+                                val_losses["recall"].append(
+                                    torch.sum(
+                                        torch.bitwise_and(recall_matches[:, :, 0] < 5 * np.pi / 180, recall_matches[:, :, 1] < 0.05)
                                     ).item()
                                 )
                                 val_losses['total'].append(num_grasps)
@@ -216,7 +225,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                     writer.add_scalar('val_' + loss_name, single_loss, total_steps)
                                     
                         writer.add_scalar('val_BAP', bap.compute(), total_steps)
-
                         model.train()
 
                 if (iters_til_checkpoint is not None) and (not total_steps % iters_til_checkpoint) and rank == 0:
