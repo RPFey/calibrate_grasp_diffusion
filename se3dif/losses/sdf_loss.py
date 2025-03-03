@@ -53,7 +53,39 @@ class CELoss():
         l_neg = -1 * torch.log( 1 + self.eps - torch.exp(logprob[pos_num:] - self.eps) ).mean()
 
         ## Total Loss
-        loss_dict[self.field] = l_pos + l_neg
+        loss_dict[self.field + '_pos'] = l_pos
+        loss_dict[self.field + '_neg'] = l_neg
 
-        info = {'l_pos': l_pos, 'l_neg': l_neg}
+        info = {}
+        return loss_dict, info
+
+class DirichletLoss():
+    def __init__(self, field='dirichlet', eps=1e-3):
+        self.field = field
+        self.eps = eps
+
+    def __call__(self, model:models.GraspDiffusionFields, model_input,
+                    ground_truth, val=False):
+        loss_dict = dict()
+        label = model_input["x_ene_pos"].reshape(-1, 4, 4)
+        n_label = model_input["x_neg_ene"].reshape(-1, 4, 4) # 
+        pos_num = label.shape[0]
+        
+        labels = torch.cat((label, n_label), dim=0)
+        final_t = torch.ones((labels.shape[0], )).to(labels.device) * (1 / self.T) + self.eps
+        logits = model.get_logits(labels, final_t) # (N, 2)
+        alphas = logits + 1
+        S = alphas.sum(dim=-1, keepdim=True) # (N, 1)
+        ps = alphas / S
+        
+        targets = torch.zeros_like(logits)
+        targets[:pos_num, 0] = 1
+        targets[pos_num:, 1] = 1
+        
+        loss = (targets - ps) ** 2 + ps * (1 - ps) / (S + 1)
+        loss = loss.sum(dim=-1).mean()
+        
+        loss_dict[self.field] = loss
+
+        info = {'dirichlet_loss': loss}
         return loss_dict, info

@@ -179,18 +179,16 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 
                                 # Binary Classfication AP
                                 if model.distribution != 'direct':
-                                    p_pose, f_pose = model_input["x_ene_pos"], model_input["x_ene_pos"]
-                                    final_t = torch.ones((p_pose.shape[1], )).to(p_pose.device) * (1 / generator.T) + 1e-3
-                                    pos_logit = model(p_pose[0], final_t)
-                                    pos_prob = torch.exp(pos_logit)
+                                    p_pose, f_pose = model_input["x_ene_pos"].view(-1, 4, 4), model_input["x_neg_ene"].view(-1, 4, 4)
+                                    pos_num = p_pose.shape[0]
                                     
-                                    final_t = torch.ones((f_pose.shape[1], )).to(p_pose.device) * (1 / generator.T) + 1e-3
-                                    neg_logit = model(f_pose[0], final_t)
-                                    neg_prob = torch.exp(neg_logit)
+                                    poses = torch.cat((p_pose, f_pose), dim=0)
+                                    final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
+                                    logprob = model(poses, final_t).view(-1)
+                                    pred = torch.exp(logprob)
                                     
-                                    pred = torch.cat([pos_prob, neg_prob], dim=0).squeeze(1)
                                     label = torch.ones(pred.shape[0]).to(pred.device).long()
-                                    label[neg_prob.shape[1]:] = 0
+                                    label[pos_num:] = 0
                                     bap(pred, label)                                    
 
                                 for name, value in val_loss.items():

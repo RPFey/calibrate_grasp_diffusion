@@ -93,12 +93,9 @@ class GraspDiffusionFields(nn.Module):
         elif self.distribution == 'direct':
             e = logits
         elif self.distribution == 'dirichlet':
-            dist = torch.distributions.Dirichlet(logits)
-            # compute the log likelihood of the positive label
-            positive_label = torch.ones_like(logits)
-            positive_label[:, 0].fill_(1e-3)
-            positive_label[:, 1].fill_(1 - 1e-3)
-            e = dist.log_prob(positive_label)
+            alphas = logits + 1
+            S = alphas.sum(dim=-1)
+            e = torch.log(logits[:, 0] / S)
         else:
             raise ValueError(f"Unknown distribution {self.distribution}")
         
