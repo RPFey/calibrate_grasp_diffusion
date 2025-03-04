@@ -159,17 +159,18 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
                         with torch.no_grad():
                             model.eval()
-                            bap = BinaryAveragePrecision(thresholds=None)
+                            aps = []
                             
                             # compute val loss
                             val_losses = defaultdict(list)
                             for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
                                 model_input = dict_to_device(model_input, device)
                                 gt = dict_to_device(gt, device)
+                                bap = BinaryAveragePrecision(thresholds=None)
                                 
                                 if cm.should_exit():
                                     cm.requeue()
-
+                                
                                 # The visual context is already set in the loss function here ! 
                                 val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
                                 
@@ -197,7 +198,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                     
                                     label = torch.ones(pred.shape[0]).to(pred.device).long()
                                     label[pos_num:] = 0
-                                    bap(pred, label)                                    
+                                    bap(pred, label)      
+                                    aps.append(bap.compute().item())                              
 
                                 for name, value in val_loss.items():
                                     val_losses[name].append(value.cpu().numpy())
@@ -229,8 +231,9 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                 if summary_fn is not None:
                                     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
                                     writer.add_scalar('val_' + loss_name, single_loss, total_steps)
-                                    
-                        writer.add_scalar('val_BAP', bap.compute(), total_steps)
+                        
+                        mAP = np.array(aps).mean()
+                        writer.add_scalar('val_mAP', mAP, total_steps)
                         model.train()
 
                 if (iters_til_checkpoint is not None) and (not total_steps % iters_til_checkpoint) and rank == 0:
