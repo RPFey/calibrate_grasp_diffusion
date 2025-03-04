@@ -3,6 +3,9 @@ import torch.nn as nn
 import se3dif.models as models
 
 class SDFLoss():
+    """ 
+        Compute the L1 SDF Loss, Only compute at the points where the SDF <= self.delta
+    """
     def __init__(self, field='sdf', delta = 0.6, grad=True):
         self.field = field
         self.delta = delta
@@ -47,10 +50,11 @@ class CELoss():
         
         labels = torch.cat((label, n_label), dim=0)
         final_t = torch.ones((labels.shape[0], )).to(labels.device) * (1 / self.T) + self.eps
-        logprob = model(labels, final_t).view(-1)
+        logits = model.get_logits(labels, final_t).view(-1)
+        prob = torch.sigmoid(logits)
         
-        l_pos = -1 * logprob[:pos_num].mean()
-        l_neg = -1 * torch.log( 1 + self.eps - torch.exp(logprob[pos_num:] - self.eps) ).mean()
+        l_pos = -1 * torch.log(prob[:pos_num]).clamp(min=-100.).mean()
+        l_neg = -1 * torch.log(1 - prob[pos_num:]).clamp(min=-100.).mean()
 
         ## Total Loss
         loss_dict[self.field + '_pos'] = l_pos

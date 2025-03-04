@@ -6,13 +6,14 @@ import torch
 
 from collections import defaultdict
 
-from se3dif.utils import makedirs, dict_to_device
+from se3dif.utils import makedirs, dict_to_device, ClusterStateManager
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import BinaryAveragePrecision
 from tqdm.autonotebook import tqdm
 import logging
 
 # log to .log file
+cm = ClusterStateManager()
 
 def compute_difference(grasp_prediction: torch.Tensor, grasp_gt: torch.Tensor) -> torch.Tensor:
     """
@@ -94,6 +95,9 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
             for step, (model_input, gt) in enumerate(train_dataloader):
                 model_input = dict_to_device(model_input, device)
                 gt = dict_to_device(gt, device)
+                
+                if cm.should_exit():
+                    cm.requeue()
 
                 forward_start_time = time.time()
                 losses, iter_info = loss_fn(model, model_input, gt)
@@ -161,6 +165,9 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                             for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
                                 model_input = dict_to_device(model_input, device)
                                 gt = dict_to_device(gt, device)
+                                
+                                if cm.should_exit():
+                                    cm.requeue()
 
                                 # The visual context is already set in the loss function here ! 
                                 val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
