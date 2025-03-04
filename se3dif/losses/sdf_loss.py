@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import se3dif.models as models
 
+from torchmetrics.classification import BinaryAveragePrecision
+
 class SDFLoss():
     def __init__(self, field='sdf', delta = 0.6, grad=True):
         self.field = field
@@ -63,6 +65,7 @@ class DirichletLoss():
     def __init__(self, field='dirichlet', eps=1e-3):
         self.field = field
         self.eps = eps
+        self.T = 30
 
     def __call__(self, model:models.GraspDiffusionFields, model_input,
                     ground_truth, val=False):
@@ -86,6 +89,12 @@ class DirichletLoss():
         loss = loss.sum(dim=-1).mean()
         
         loss_dict[self.field] = loss
+        
+        with torch.no_grad():
+            bap = BinaryAveragePrecision(thresholds=None)
+            pred = ps[:, 0].detach()
+            label = targets[:, 0].detach().long()
+            ap = bap(pred, label)
 
-        info = {'dirichlet_loss': loss}
+        info = {'ap': ap}
         return loss_dict, info

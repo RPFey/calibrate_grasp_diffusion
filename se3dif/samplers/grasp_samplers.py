@@ -143,7 +143,7 @@ class Grasp_AnnealedLD():
             if noise_off:
                 noise = torch.zeros_like(phi0_in)
             else:
-                noise = torch.randn_like(phi0_in)*noise_std
+                noise = torch.randn_like(phi0_in) * noise_std
 
             ## 4. Compute translation ##
             delta = -c_lr/2 * d_phi + np.sqrt(c_lr) * noise
