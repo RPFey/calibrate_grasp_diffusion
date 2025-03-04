@@ -15,7 +15,11 @@ class SummaryDict():
 
 def get_summary(args, activate_summary=False):
     if activate_summary:
-        summaries = {'sdf': sdf_summary, 'denoising': denoising_summary}
+        summaries = {}
+        if 'projected_denoising_loss' in args["Losses"]:
+            summaries['denoising'] = denoising_summary
+        if 'sdf_loss' in args["Losses"]:
+            summaries['sdf'] = sdf_summary
     else:
         summaries = {}
     summary_dict = SummaryDict(summaries=summaries)

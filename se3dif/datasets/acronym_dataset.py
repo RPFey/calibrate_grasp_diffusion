@@ -453,16 +453,18 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         self.scale = 8.
         self.split = split
 
+        rng = np.random.RandomState(seed)
         self.files = []
         for cls in self.class_type:
-            self.files += glob.glob(root_dir + '/' + cls + '/*.npz')
-            
-        rng = np.random.RandomState(seed)
-        rng.shuffle(self.files)
-        if self.split == 'train':
-            self.files = self.files[:int(0.9*len(self.files))]
-        elif self.split == 'test':
-            self.files = self.files[int(0.9*len(self.files)):]
+            cls_files = glob.glob(root_dir + '/' + cls + '/*.npz')
+            rng.shuffle(cls_files)
+            test_size = int(0.1 * len(cls_files))
+            test_size = max(test_size, 1)
+            train_size = len(cls_files) - test_size
+            if self.split == 'train':
+                self.files = self.files + cls_files[:train_size]
+            elif self.split == 'test':
+                self.files = self.files + cls_files[train_size:]
 
     def __len__(self):
         return len(self.files)
@@ -523,11 +525,12 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                 rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps-len(H_grasps))
                 H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
             
-            if len(F_grasps) > self.num_grasps:
-                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_grasps)
+            neg_grasps = 2 * self.num_grasps
+            if len(F_grasps) > neg_grasps:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=neg_grasps)
                 F_grasps = F_grasps[rix, ...]
-            elif len(F_grasps) < self.num_grasps:
-                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_grasps-len(F_grasps))
+            elif len(F_grasps) < neg_grasps:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=neg_grasps-len(F_grasps))
                 F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
         #######################
         
