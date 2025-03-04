@@ -95,7 +95,7 @@ class GraspDiffusionFields(nn.Module):
         elif self.distribution == 'dirichlet':
             alphas = logits + 1
             S = alphas.sum(dim=-1)
-            e = torch.log(logits[:, 0] / S)
+            e = torch.log(logits[:, 0] / S + 1e-6)
         else:
             raise ValueError(f"Unknown distribution {self.distribution}")
         
