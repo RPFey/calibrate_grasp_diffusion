@@ -101,9 +101,11 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
                 forward_start_time = time.time()
                 losses, iter_info = loss_fn(model, model_input, gt)
-                writer.add_scalar("train_ap", iter_info["ap"], total_steps)
+                
                 if rank == 0:
                     logging.info("Forward time: %0.6f" % (time.time() - forward_start_time))
+                    if 'ap' in iter_info:
+                        writer.add_scalar("train_ap", iter_info["ap"], total_steps)
 
                 train_loss = 0.
                 for loss_name, loss in losses.items():

@@ -20,6 +20,7 @@ SPEC_FILE=$1
 
 hostname
 echo $SLURM_ARRAY_TASK_ID '/' $SLURM_ARRAY_TASK_COUNT
+echo $SPEC_FILE
 
 source /mnt/kostas-graid/sw/envs/boshu/miniconda3/bin/activate se3diff
 export PYOPENGL_PLATFORM=egl
