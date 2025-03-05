@@ -85,17 +85,17 @@ class GraspDiffusionFields(nn.Module):
         self.z = self.vision_encoder(O)
         
     def forward(self, H, k):
-        """ Predict the energy (Log Probality) of the current samples. """
+        """ Predict the energy (Negative Log Probality) of the current samples. """
         logits = self.get_logits(H, k)
         
         if self.distribution == 'bernoulli':
-            e = torch.log(torch.sigmoid(logits) + 1e-6)
+            e = -1 * torch.log(torch.sigmoid(logits) + 1e-6)
         elif self.distribution == 'direct':
             e = logits
         elif self.distribution == 'dirichlet':
             alphas = logits + 1
             S = alphas.sum(dim=-1)
-            e = torch.log(logits[:, 0] / S + 1e-6)
+            e = -1 * torch.log(logits[:, 0] / S + 1e-6)
         else:
             raise ValueError(f"Unknown distribution {self.distribution}")
         
