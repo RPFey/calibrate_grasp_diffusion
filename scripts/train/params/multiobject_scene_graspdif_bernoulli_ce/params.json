@@ -8,9 +8,9 @@
   "TrainSpecs": {
     "batch_size": 24,
     "num_epochs": 20000,
-    "steps_til_summary": 500,
-    "iters_til_checkpoint": 5000,
-    "epochs_til_checkpoint": 500
+    "steps_til_summary": 2500,
+    "iters_til_checkpoint": 10000,
+    "epochs_til_checkpoint": 100
   },
   "NetworkArch" : "PointcloudGraspDiffusion",
   "NetworkSpecs" : {

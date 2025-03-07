@@ -26,6 +26,9 @@ def parse_args():
 
     p.add_argument('--spec_file', type=str, default='multiobject_p_graspdif'
                    , help='root for saving logging')
+    
+    p.add_argument('--num_workers', type=int, default=16
+                , help='root for saving logging')
 
     p.add_argument('--summary', type=bool, default=False
                    , help='activate or deactivate summary')
@@ -65,11 +68,13 @@ def main(opt):
         device = torch.device('cpu')
 
     ## Dataset
-    train_dataset = datasets.PointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'])
-    train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    train_dataset = datasets.PointcloudAcronymAndSDFDataset(
+        class_type=['Cup', 'Mug', 'Fork', 'Hat', 'Bottle', 'Bowl', 'Car', 'Donut', 'Laptop', 'MousePad', 'Pencil'],
+        augmented_rotation=True, one_object=args['single_object'])
+    train_dataloader = DataLoader(train_dataset, num_workers=opt.num_workers, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
     test_dataset = copy.deepcopy(train_dataset)
     test_dataset.set_test_data()
-    test_dataloader = DataLoader(test_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    test_dataloader = DataLoader(test_dataset, num_workers=1, batch_size=1, shuffle=True, drop_last=True)
 
     ## Model
     args['device'] = device

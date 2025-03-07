@@ -31,6 +31,9 @@ def parse_args():
 
     p.add_argument('--spec_file', type=str, default='multiobject_partialp_graspdif'
                    , help='root for saving logging')
+    
+    p.add_argument('--num_workers', type=int, default=16
+                , help='root for saving logging')
 
     p.add_argument('--summary', type=bool, default=True
                    , help='activate or deactivate summary')
@@ -71,10 +74,10 @@ def main(opt):
 
     ## Dataset
     train_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'])
-    train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    train_dataloader = DataLoader(train_dataset, num_workers=opt.num_workers, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
     test_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'],
                                                                   test_files=train_dataset.test_grasp_files)
-    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True, drop_last=True)
+    test_dataloader = DataLoader(test_dataset, num_workers=1, batch_size=1, shuffle=True, drop_last=True)
 
     ## Model
     args['device'] = device

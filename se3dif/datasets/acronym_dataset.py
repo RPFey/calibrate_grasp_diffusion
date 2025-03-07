@@ -443,11 +443,12 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                                    'PillBottle', 'Plant','PowerSocket', 'PowerStrip', 'PS3', 'PSP', 'Ring', 'Scissors', 'Shampoo', 'Shoes',
                                    'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
                                    'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
-                        visualize = False, split = 'train', num_grasps = 200, num_scene_pts = 2048, num_target_pts = 1024, seed = 42):
+                        visualize = False, split = 'train', num_grasps = 128, num_scene_pts = 2048, num_target_pts = 1024, seed = 42):
         # class_type = ['Cup']
         self.class_type = class_type
         self.visualize = visualize
-        self.num_grasps = num_grasps
+        self.num_pos = num_grasps
+        self.num_neg = 3 * self.num_pos
         self.num_scene_pts = num_scene_pts
         self.num_target_pts = num_target_pts
         self.scale = 8.
@@ -518,19 +519,18 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         
         # downsample grasps for training 
         if self.split == 'train': 
-            if len(H_grasps) > self.num_grasps:
-                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps)
+            if len(H_grasps) > self.num_pos:
+                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_pos)
                 H_grasps = H_grasps[rix, ...]
-            elif len(H_grasps) < self.num_grasps:
-                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_grasps-len(H_grasps))
+            elif len(H_grasps) < self.num_pos:
+                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_pos - len(H_grasps))
                 H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
-            
-            neg_grasps = 2 * self.num_grasps
-            if len(F_grasps) > neg_grasps:
-                rix = np.random.randint(low=0, high=len(F_grasps), size=neg_grasps)
+
+            if len(F_grasps) > self.num_neg:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_neg)
                 F_grasps = F_grasps[rix, ...]
-            elif len(F_grasps) < neg_grasps:
-                rix = np.random.randint(low=0, high=len(F_grasps), size=neg_grasps-len(F_grasps))
+            elif len(F_grasps) < self.num_neg:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_neg - len(F_grasps))
                 F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
         #######################
         
@@ -601,7 +601,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                'target_index': torch.from_numpy(target_index).float(),
                'scale': torch.Tensor([self.scale]).float()}
 
-        return res, {'sdf': torch.from_numpy(sdf).float(), "class_name": cls_name}
+        return res, {'sdf': torch.from_numpy(sdf).float()}
 
     def __getitem__(self, index):
         'Generates one sample of data'

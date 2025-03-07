@@ -44,7 +44,7 @@ class ProjectedSE3DenoisingLoss():
                                               only_inputs=True, retain_graph=True, create_graph=True)[0]
 
         # Compute L1 loss
-        z_target = z / std[...,None]
+        z_target = z / std[..., None]
         loss_fn = nn.L1Loss()
         loss = loss_fn(grad_energy, z_target) / 10.
         
@@ -165,7 +165,9 @@ class ProjectedSE3DenoisingCOSLoss():
         # Compute L1 loss
         z_target = z / std[...,None]
         cos_similarity = nn.functional.cosine_similarity(grad_energy, z_target, dim=-1)
-        loss = 1 - cos_similarity.mean()
+        weight = torch.norm(z_target, dim=-1)
+        loss = 1 - (weight * cos_similarity).mean()
+        
 
         info = {self.field: grad_energy}
         loss_dict = {"Score loss": loss}

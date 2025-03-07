@@ -71,9 +71,11 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
             optim.load_state_dict(state)
         if rank == 0:
             logging.info("Loaded model from the previous checkpoint")
-        total_steps = states['steps']             
+        total_steps = states['steps']   
+        start_epochs = total_steps // len(train_dataloader)
     else:
         total_steps = 0
+        start_epochs = 0
 
     if rank == 0:
         makedirs(summaries_dir)
@@ -85,13 +87,15 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
     with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
         train_losses = []
-        for epoch in range(epochs):
+        for epoch in range(start_epochs, epochs):
             # if not epoch % epochs_til_checkpoint and epoch and rank == 0:
             #     torch.save(model.state_dict(),
             #                os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
             #     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
             #                np.array(train_losses))
 
+            # aps = []
+            model.train()
             for step, (model_input, gt) in enumerate(train_dataloader):
                 model_input = dict_to_device(model_input, device)
                 gt = dict_to_device(gt, device)
@@ -103,42 +107,34 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 losses, iter_info = loss_fn(model, model_input, gt)
                 
                 if rank == 0:
-                    logging.info("Forward time: %0.6f" % (time.time() - forward_start_time))
+                    forward_time  = time.time() - forward_start_time
+                    logging.info("Forward time: %0.6f" % (forward_time))
                     if 'ap' in iter_info:
                         writer.add_scalar("train_ap", iter_info["ap"], total_steps)
+                    if 'noise_ap' in iter_info:
+                        writer.add_scalar("train_noise_ap", iter_info["noise_ap"], total_steps)
 
                 train_loss = 0.
                 for loss_name, loss in losses.items():
                     single_loss = loss.mean()
-
                     if rank == 0:
                         writer.add_scalar(loss_name, single_loss, total_steps)
                     train_loss += single_loss
+                
+                # if 'ap' in losses: 
+                #     aps.append(1 - losses["ap"]) # only for ap loss
 
                 train_losses.append(train_loss.item())
                 if rank == 0:
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
-
-                if not total_steps % steps_til_summary and rank == 0:
-                    if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
-                        os.remove(os.path.join(checkpoints_dir, 'model_current.pth'))
-                    
-                    state_dict = {
-                        "model_state": model.state_dict(),
-                        "optimizers": [optim.state_dict() for optim in optimizers],
-                        "steps": total_steps
-                    }
-                    torch.save(state_dict, 
-                               os.path.join(checkpoints_dir, 'model_current.pth'))
-                    if summary_fn is not None:
-                        summary_fn(model, model_input, gt, iter_info, writer, total_steps)
 
                 backward_start_time = time.time()
                 for optim in optimizers:
                     optim.zero_grad()
                 train_loss.backward()
                 if rank == 0:
-                    logging.info("Backward time: %0.6f" % (time.time() - backward_start_time))
+                    backward_time = time.time() - backward_start_time
+                    logging.info("Backward time: %0.6f" % (backward_time))
 
                 if clip_grad:
                     if isinstance(clip_grad, bool):
@@ -151,109 +147,136 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
                 if rank == 0:
                     pbar.update(1)
-
-                if not total_steps % steps_til_summary and rank == 0:
-                    print("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - forward_start_time))
-
-                    if val_dataloader is not None:
-                        # sample poses 
-                        from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
-
-                        with torch.no_grad():
-                            model.eval()
-                            aps = []
-                            
-                            # compute val loss
-                            val_losses = defaultdict(list)
-                            for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
-                                model_input = dict_to_device(model_input, device)
-                                gt = dict_to_device(gt, device)
-                                bap = BinaryAveragePrecision(thresholds=None)
-                                
-                                if cm.should_exit():
-                                    cm.requeue()
-                                
-                                # The visual context is already set in the loss function here ! 
-                                val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
-                                
-                                # sample grasps
-                                H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
-                                num_grasps = H_grasps.shape[1]
-                                generator = Grasp_AnnealedLD(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
-                                H_sampled = generator.sample()[0] # (B, N, 4, 4)
-                                H_sampled = H_sampled.unsqueeze(0)
-                            
-                                # compute the angular and translation distance between H and H_grasps
-                                difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
-                                acc_matches = torch.min(difference, dim=2)[0]
-                                recall_matches = torch.min(difference, dim=1)[0]
-                                
-                                # Binary Classfication AP
-                                if model.distribution != 'direct':
-                                    p_pose, f_pose = model_input["x_ene_pos"].view(-1, 4, 4), model_input["x_neg_ene"].view(-1, 4, 4)
-                                    pos_num = p_pose.shape[0]
-                                    
-                                    poses = torch.cat((p_pose, f_pose), dim=0)
-                                    final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
-                                    logprob = model(poses, final_t).view(-1)
-                                    pred = torch.exp(logprob)
-                                    
-                                    label = torch.ones(pred.shape[0]).to(pred.device).long()
-                                    label[pos_num:] = 0
-                                    bap(pred, label)      
-                                    aps.append(bap.compute().item())                              
-
-                                for name, value in val_loss.items():
-                                    val_losses[name].append(value.cpu().numpy())
-                                    
-                                val_losses["acc_avg_angular"].append(acc_matches[:, :, 0].mean().item())
-                                val_losses["acc_avg_translation"].append(acc_matches[:, :, 1].mean().item())
-                                val_losses["acc"].append(
-                                    torch.sum(
-                                        torch.bitwise_and(acc_matches[:, :, 0] < 5 * np.pi / 180, acc_matches[:, :, 1] < 0.05)
-                                    ).item()
-                                )
-                                
-                                val_losses['rec_avg_angular'].append(recall_matches[:, :, 0].mean().item())
-                                val_losses['rec_avg_translation'].append(recall_matches[:, :, 1].mean().item())
-                                val_losses["recall"].append(
-                                    torch.sum(
-                                        torch.bitwise_and(recall_matches[:, :, 0] < 5 * np.pi / 180, recall_matches[:, :, 1] < 0.05)
-                                    ).item()
-                                )
-                                val_losses['total'].append(num_grasps)
-                                  
-                        for loss_name, loss in val_losses.items():
-                            if loss_name in ['total', 'acc']:
-                                if loss_name == 'acc':
-                                    acc_rate = sum(val_losses['acc']) / sum(val_losses['total'])
-                                    writer.add_scalar('val_acc', acc_rate, total_steps)
-                            else:
-                                single_loss = np.mean(loss)
-                                if summary_fn is not None:
-                                    summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
-                                    writer.add_scalar('val_' + loss_name, single_loss, total_steps)
-                        
-                        mAP = np.array(aps).mean()
-                        writer.add_scalar('val_mAP', mAP, total_steps)
-                        model.train()
-
-                if (iters_til_checkpoint is not None) and (not total_steps % iters_til_checkpoint) and rank == 0:
-                    state_dict = {
-                        "model_state": model.state_dict(),
-                        "optimizers": [optim.state_dict() for optim in optimizers],
-                        "steps": total_steps
-                    }
-                    
-                    torch.save(state_dict,
-                               os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
-                    # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
-                    #            np.array(train_losses))
+                    pbar.set_postfix(suffix=f"Ep {epoch}, f-t {forward_time:.4f}, b-t {backward_time:.4f}")
 
                 total_steps += 1
                 if max_steps is not None and total_steps==max_steps:
                     break
 
+            # dynamic adjust number of positive samples
+            # if len(aps) > 0:
+            #     average_ap = np.array(aps).mean()
+            #     last_pos_num = train_dataloader.dataset.num_pos
+            #     if average_ap > 0.75:
+            #         logging.info("Decrease the number of positive samples")
+            #         train_dataloader.dataset.num_pos = train_dataloader.dataset.num_pos // 2
+            #         train_dataloader.dataset.num_pos = max(4, train_dataloader.dataset.num_pos)
+            #     elif average_ap < 0.25:
+            #         logging.info("Increase the number of positive samples")
+            #         train_dataloader.dataset.num_pos = train_dataloader.dataset.num_pos * 2
+            #         train_dataloader.dataset.num_pos = min(128, train_dataloader.dataset.num_pos)
+            #     train_dataloader.dataset.num_neg = train_dataloader.dataset.num_neg + (last_pos_num - train_dataloader.dataset.num_pos)
+            
+            if (not epoch % (epochs_til_checkpoint // 2) ) and rank == 0:
+                print("Step Summary ... ")
+                if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
+                    os.remove(os.path.join(checkpoints_dir, 'model_current.pth'))
+                
+                state_dict = {
+                    "model_state": model.state_dict(),
+                    "optimizers": [optim.state_dict() for optim in optimizers],
+                    "steps": total_steps
+                }
+                torch.save(state_dict, os.path.join(checkpoints_dir, 'model_current.pth'))
+                
+                # this function is weird ... 
+                # if summary_fn is not None:
+                #     summary_fn(model, model_input, gt, iter_info, writer, total_steps)
+            
+            if (not epoch % epochs_til_checkpoint) and rank == 0:
+
+                print("Save Checkpoint ... ")
+                state_dict = {
+                    "model_state": model.state_dict(),
+                    "optimizers": [optim.state_dict() for optim in optimizers],
+                    "steps": total_steps
+                }
+                torch.save(state_dict, os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+                
+                # evaltion 
+                if val_dataloader is not None:
+                    # sample poses 
+                    from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
+
+                    with torch.no_grad():
+                        model.eval()
+                        aps = []
+                        
+                        # compute val loss
+                        val_losses = defaultdict(list)
+                        for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
+                            model_input = dict_to_device(model_input, device)
+                            gt = dict_to_device(gt, device)
+                            bap = BinaryAveragePrecision(thresholds=None)
+                            
+                            if cm.should_exit():
+                                cm.requeue()
+                            
+                            # The visual context is already set in the loss function here ! 
+                            val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
+                            
+                            # sample grasps
+                            H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
+                            num_grasps = H_grasps.shape[1]
+                            generator = Grasp_AnnealedLD(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
+                            H_sampled = generator.sample()[0] # (B, N, 4, 4)
+                            H_sampled = H_sampled.unsqueeze(0)
+                        
+                            # compute the angular and translation distance between H and H_grasps
+                            difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
+                            acc_matches = torch.min(difference, dim=2)[0]
+                            recall_matches = torch.min(difference, dim=1)[0]
+                            
+                            # Binary Classfication AP
+                            if model.distribution != 'direct':
+                                p_pose, f_pose = model_input["x_ene_pos"].view(-1, 4, 4), model_input["x_neg_ene"].view(-1, 4, 4)
+                                pos_num = p_pose.shape[0]
+                                
+                                poses = torch.cat((p_pose, f_pose), dim=0)
+                                final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
+                                logprob = -1 * model(poses, final_t).view(-1)
+                                pred = torch.exp(logprob)
+                                
+                                label = torch.ones(pred.shape[0]).to(pred.device).long()
+                                label[pos_num:] = 0
+                                bap(pred, label)      
+                                aps.append(bap.compute().item())                              
+
+                            for name, value in val_loss.items():
+                                val_losses[name].append(value.cpu().numpy())
+                                
+                            val_losses["acc_avg_angular"].append(acc_matches[:, :, 0].mean().item())
+                            val_losses["acc_avg_translation"].append(acc_matches[:, :, 1].mean().item())
+                            val_losses["acc"].append(
+                                torch.sum(
+                                    torch.bitwise_and(acc_matches[:, :, 0] < 5 * np.pi / 180, acc_matches[:, :, 1] < 0.05)
+                                ).item()
+                            )
+                            
+                            val_losses['rec_avg_angular'].append(recall_matches[:, :, 0].mean().item())
+                            val_losses['rec_avg_translation'].append(recall_matches[:, :, 1].mean().item())
+                            val_losses["recall"].append(
+                                torch.sum(
+                                    torch.bitwise_and(recall_matches[:, :, 0] < 5 * np.pi / 180, recall_matches[:, :, 1] < 0.05)
+                                ).item()
+                            )
+                            val_losses['total'].append(num_grasps)
+                                
+                    for loss_name, loss in val_losses.items():
+                        if loss_name in ['total', 'acc']:
+                            if loss_name == 'acc':
+                                acc_rate = sum(val_losses['acc']) / sum(val_losses['total'])
+                                writer.add_scalar('val_acc', acc_rate, total_steps)
+                        else:
+                            single_loss = np.mean(loss)
+                            writer.add_scalar('val_' + loss_name, single_loss, total_steps)
+                            # if summary_fn is not None:
+                            #     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
+                    
+                    mAP = np.array(aps).mean()
+                    print(f"Ep {epoch}, Validation mAP: {mAP}")
+                    writer.add_scalar('val_mAP', mAP, total_steps)
+            
             if max_steps is not None and total_steps==max_steps:
                 break
         

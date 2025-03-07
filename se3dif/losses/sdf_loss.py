@@ -68,7 +68,7 @@ class CELoss():
             pred = prob.detach()
             label = torch.ones_like(prob).long()
             label[pos_num:] = 0
-            ap = bap(pred, label)
+            ap = bap(pred, label).item()
 
         info = {'ap': ap}
         return loss_dict, info
@@ -106,7 +106,7 @@ class DirichletLoss():
             bap = BinaryAveragePrecision(thresholds=None)
             pred = ps[:, 0].detach()
             label = targets[:, 0].detach().long()
-            ap = bap(pred, label)
+            ap = bap(pred, label).item()
 
         info = {'ap': ap}
         return loss_dict, info

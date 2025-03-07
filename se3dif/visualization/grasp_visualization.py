@@ -70,7 +70,6 @@ def visualize_points(model, input):
     with torch.no_grad():
         x, sdf = model.get_points_and_features(input)
 
-
     ## Visualization points ##
     point_clouds = input['point_cloud'].cpu().numpy()
     x = x[0,0,...].cpu().numpy()
