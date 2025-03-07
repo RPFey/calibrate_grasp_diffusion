@@ -228,14 +228,20 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                             recall_matches = torch.min(difference, dim=1)[0]
                             
                             # Binary Classfication AP
-                            if model.distribution != 'direct':
+                            if "x_neg_ene" in model_input:
                                 p_pose, f_pose = model_input["x_ene_pos"].view(-1, 4, 4), model_input["x_neg_ene"].view(-1, 4, 4)
                                 pos_num = p_pose.shape[0]
                                 
                                 poses = torch.cat((p_pose, f_pose), dim=0)
                                 final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
                                 logprob = -1 * model(poses, final_t).view(-1)
-                                pred = torch.exp(logprob)
+                                
+                                if model.distribution != 'direct':
+                                    pred = torch.exp(logprob)
+                                else:
+                                    # for direct ("Bolzman"), simply normalize to [0, 1]
+                                    # it will not change the order and affect AP computation
+                                    pred = (logprob - logprob.min()) / (logprob.max() - logprob.min())
                                 
                                 label = torch.ones(pred.shape[0]).to(pred.device).long()
                                 label[pos_num:] = 0
