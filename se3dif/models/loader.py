@@ -9,6 +9,36 @@ from se3dif import models
 from se3dif.utils import get_pretrained_models_src, load_experiment_specifications
 pretrained_models_dir = get_pretrained_models_src()
 
+# TODO Change to MoE structure.
+class DirichletEnergy(nn.Module):
+    def __init__(self, in_dim, hidden_dim):
+        """ Energy model for Dirichlet distribution 
+        
+        Args:
+            in_dim (int): input dimension
+            hidden_dim (int): hidden dimension, exponential of 2
+        """
+        super().__init__()
+        self.gate = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU()
+        )
+    
+    def forward(self, x):
+        """ 
+        Args:
+            x (torch.Tensor): input tensor of shape (..., in_dim)
+        Returns:
+            torch.Tensor: output tensor of shape (..., 2)
+        """
+        vote = self.gate(x)
+        num_gates = vote.shape[-1]
+        
+        positive = torch.sum(vote[..., :num_gates//2], dim=-1, keepdim=True)
+        negative = torch.sum(vote[..., num_gates//2:], dim=-1, keepdim=True)
+        return torch.cat([positive, negative], dim=-1)
+
 class Exp(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -148,13 +178,7 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
             nn.Linear(hidden_dim, 1),
         )
     elif distribution == 'dirichlet':
-        energy_net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2),
-            nn.ReLU(),
-        )
+        energy_net = DirichletEnergy(in_dim, hidden_dim)
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
     

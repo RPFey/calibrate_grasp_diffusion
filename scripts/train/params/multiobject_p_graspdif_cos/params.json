@@ -8,7 +8,7 @@
     "num_epochs": 90000,
     "steps_til_summary": 500,
     "iters_til_checkpoint": 1000,
-    "epochs_til_checkpoint": 10
+    "epochs_til_checkpoint": 100
   },
   "NetworkArch" : "PointcloudGraspDiffusion",
   "NetworkSpecs" : {

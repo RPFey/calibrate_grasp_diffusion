@@ -1,6 +1,6 @@
 {
   "Description" : [ "This experiment trains jointly an SDF model and a SE(3) Grasp Energy" ],
-  "exp_log_dir": "multiobject_scene_graspdif",
+  "exp_log_dir": "multiobject_scene_graspdif_fix",
   "single_object": false,
   "num_scene_points": 512,
   "num_target_points": 512,
@@ -59,5 +59,5 @@
       "Interval" : 500,
       "Factor" : 0.5
     }],
-  "Losses": ["sdf_loss", "projected_denoising_loss"]
+  "Losses": ["sdf_loss", "projected_fix_denoising_l1loss"]
 }

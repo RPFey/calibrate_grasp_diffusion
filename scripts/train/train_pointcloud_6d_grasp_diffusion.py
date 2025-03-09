@@ -38,6 +38,9 @@ def parse_args():
 
     p.add_argument('--models_root', type=str, default=root_dir
                    , help='root for saving logging')
+    
+    p.add_argument("--data_root", type=str, default=os.path.join(root_dir, 'data')
+                   , help='root for saving logging')
 
     p.add_argument('--device',  type=str, default='cuda',)
     p.add_argument('--class_type', type=str, default='Mug')
