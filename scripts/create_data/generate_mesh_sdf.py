@@ -365,6 +365,7 @@ if __name__ == '__main__':
                 signed_distance = signed_distance.numpy()
                 
                 # use camera observations
+                c2ws = []
                 if args.partial:
                     # choose camera intrinsics and extrinsics
                     renderer = SceneRenderer(scene, fov=np.pi / 3, width=640, height=480)
@@ -374,9 +375,22 @@ if __name__ == '__main__':
                     obs_poses = []
                     rand_idx = np.random.choice(len(feasible_poses), 2)
                     for idx in rand_idx:
-                        camera_pose = feasible_poses[idx] @ np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) # change x right, y up, z back
-                        distance = np.random.uniform(low=0.25, high=0.5)
-                        camera_pose[:3, 3] = camera_pose[:3, 3] + camera_pose[:3, 2] * distance
+                        # Random sample camera pose looking at object center
+                        camera_pose = trimesh_camera.look_at(
+                            points=[scene.get_transform(target_name, frame="com")[:3, 3]],
+                            rotation=trimesh.transformations.euler_matrix(
+                                np.random.uniform(low=np.pi / 4, high=np.pi / 3),
+                                0,
+                                np.random.uniform(low=-np.pi, high=np.pi),
+                            ),
+                            distance=np.random.uniform(low=0.25, high=0.5),
+                        )
+                        
+                        # Sample camera pose using grasp poses
+                        # camera_pose = feasible_poses[idx] @ np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) # change x right, y up, z back
+                        # distance = np.random.uniform(low=0.25, high=0.5)
+                        # camera_pose[:3, 3] = camera_pose[:3, 3] + camera_pose[:3, 2] * distance
+                        
                         obs_poses.append(camera_pose)
                     
                     # topview
@@ -438,15 +452,16 @@ if __name__ == '__main__':
                 target_indexes = target_indexes[distance < 2 * ball_range]
             
                 # visualize the scene
-                # object_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-                # object_coord.transform(target_T)
-                # for c2w in c2ws:
-                #     cam_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-                #     cam_coord.transform(c2w)
-                #     o3d_mesh.append(cam_coord)
-                # o3d_mesh.append(scene_origin)
-                # o3d_mesh.append(object_coord)
-                # o3d.visualization.draw_geometries(o3d_mesh)
+                if args.viz:
+                    object_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+                    object_coord.transform(target_T)
+                    for c2w in c2ws:
+                        cam_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+                        cam_coord.transform(c2w)
+                        o3d_mesh.append(cam_coord)
+                    o3d_mesh.append(scene_origin)
+                    o3d_mesh.append(object_coord)
+                    o3d.visualization.draw_geometries(o3d_mesh)
                 
                 # FPS downsample
                 target_pts = scene_pts[target_indexes == 1]
