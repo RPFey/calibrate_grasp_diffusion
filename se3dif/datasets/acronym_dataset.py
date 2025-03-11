@@ -327,12 +327,25 @@ class PointcloudAcronymAndSDFDataset(Dataset):
         self.type = 'test'
 
     def _get_grasps(self, grasp_obj):
-        try:
-            rix = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density)
-        except:
-            print('lets see')
-        H_grasps = grasp_obj.good_grasps[rix, ...]
-        return H_grasps
+        if self.type == 'test':
+            H_grasps = grasp_obj.good_grasps
+            F_grasps = grasp_obj.bad_grasps 
+        else:
+            if grasp_obj.good_grasps.shape[0] >= self.n_density:
+                gix = np.random.choice(grasp_obj.good_grasps.shape[0], self.n_density, replace=False)
+                H_grasps = grasp_obj.good_grasps[gix, ...]
+            else:
+                gidx = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density - grasp_obj.good_grasps.shape[0])
+                H_grasps = np.concatenate([grasp_obj.good_grasps, grasp_obj.good_grasps[gidx, ...]], axis=0)
+            
+            if grasp_obj.bad_grasps.shape[0] >= self.n_density:
+                gix = np.random.choice(grasp_obj.bad_grasps.shape[0], self.n_density, replace=False)
+                F_grasps = grasp_obj.bad_grasps[gix, ...]
+            else:
+                gidx = np.random.randint(low=0, high=grasp_obj.bad_grasps.shape[0], size=self.n_density - grasp_obj.bad_grasps.shape[0])
+                F_grasps = np.concatenate([grasp_obj.bad_grasps, grasp_obj.bad_grasps[gidx, ...]], axis=0)
+        
+        return H_grasps, F_grasps
 
     def _get_sdf(self, grasp_obj, grasp_file):
 
@@ -376,7 +389,7 @@ class PointcloudAcronymAndSDFDataset(Dataset):
         pcl = self._get_mesh_pcl(grasps_obj)
 
         ## Grasps good/bad
-        H_grasps = self._get_grasps(grasps_obj)
+        H_grasps, F_grasps = self._get_grasps(grasps_obj)
 
         ## rescale, rotate and translate ##
         xyz = xyz*self.scale
@@ -427,6 +440,7 @@ class PointcloudAcronymAndSDFDataset(Dataset):
         res = {'visual_context': torch.from_numpy(pcl).float(),
                'x_sdf': torch.from_numpy(xyz).float(),
                'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'x_neg_ene': torch.from_numpy(F_grasps).float(),
                'scale': torch.Tensor([self.scale]).float()}
 
         return res, {'sdf': torch.from_numpy(sdf).float()}
@@ -520,14 +534,16 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         # downsample grasps for training 
         if self.split == 'train': 
             if len(H_grasps) > self.num_pos:
-                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_pos)
+                # draw without replacement
+                rix = np.random.choice(len(H_grasps), size=self.num_pos, replace=False)
                 H_grasps = H_grasps[rix, ...]
             elif len(H_grasps) < self.num_pos:
                 rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_pos - len(H_grasps))
                 H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
 
             if len(F_grasps) > self.num_neg:
-                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_neg)
+                # draw without replacement
+                rix = np.random.choice(len(F_grasps), size=self.num_neg, replace=False)
                 F_grasps = F_grasps[rix, ...]
             elif len(F_grasps) < self.num_neg:
                 rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_neg - len(F_grasps))
@@ -791,6 +807,10 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
 
 
 if __name__ == '__main__':
+    import argparse
+    args = argparse.ArgumentParser()
+    args.add_argument('--data_root', type=str, default="/root/calibrate_grasp_diffusion/data/scene_2048")
+    opt = args.parse_args()
 
     # ## Index conditioned dataset
     # dataset = AcronymAndSDFDataset(visualize=True, augmented_rotation=True, one_object=False)
@@ -801,8 +821,8 @@ if __name__ == '__main__':
     # ## Pointcloud conditioned dataset
     # dataset = PartialPointcloudAcronymAndSDFDataset(visualize=False, augmented_rotation=True, one_object=False)
 
-    dataset = PointcloudSceneAcronymAndSDFDataset(root_dir='/root/calibrate_grasp_diffusion/data/scene_2048', visualize=True)
-    dataset[10]
+    dataset = PointcloudSceneAcronymAndSDFDataset(root_dir=opt.data_root, visualize=True)
+    dataset[0]
 
     # train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
     # for x,y in train_dataloader:
