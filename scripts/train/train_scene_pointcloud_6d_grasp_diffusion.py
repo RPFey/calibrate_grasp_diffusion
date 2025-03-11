@@ -44,6 +44,7 @@ def parse_args():
 
     p.add_argument('--models_root', type=str, default=root_dir
                    , help='root for saving logging')
+    
     p.add_argument("--data_root", type=str, default=os.path.join(root_dir, 'data', 'scene_sdf')
                    , help='root for saving logging')
 

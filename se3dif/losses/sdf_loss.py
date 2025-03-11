@@ -63,14 +63,17 @@ class CELoss():
         loss_dict[self.field + '_pos'] = l_pos
         loss_dict[self.field + '_neg'] = l_neg
 
-        with torch.no_grad():
-            bap = BinaryAveragePrecision(thresholds=None)
-            pred = prob.detach()
-            label = torch.ones_like(prob).long()
-            label[pos_num:] = 0
-            ap = bap(pred, label).item()
-
-        info = {'ap': ap}
+        info = {} 
+        
+        # Uncomment to compute AP
+        # with torch.no_grad():
+        #     bap = BinaryAveragePrecision(thresholds=None)
+        #     pred = prob.detach()
+        #     label = torch.ones_like(prob).long()
+        #     label[pos_num:] = 0
+        #     ap = bap(pred, label).item()
+        #     info['ap'] = ap
+            
         return loss_dict, info
 
 class DirichletLoss():
@@ -102,13 +105,16 @@ class DirichletLoss():
         
         loss_dict[self.field] = loss
         
-        with torch.no_grad():
-            bap = BinaryAveragePrecision(thresholds=None)
-            pred = ps[:, 0].detach()
-            label = targets[:, 0].detach().long()
-            ap = bap(pred, label).item()
-
-        info = {'ap': ap}
+        info = {}
+        
+        # Uncomment to compute AP
+        # with torch.no_grad():
+        #     bap = BinaryAveragePrecision(thresholds=None)
+        #     pred = ps[:, 0].detach()
+        #     label = targets[:, 0].detach().long()
+        #     ap = bap(pred, label).item()
+        #     info['ap'] = ap
+          
         return loss_dict, info
     
 class APLossImpl (nn.Module):

@@ -8,9 +8,18 @@ from se3dif.utils import SO3_R3
 
 
 class ApproximatedGrasp_AnnealedLD():
-    def __init__(self, model, device='cpu', batch=10, dim =3,
+    def __init__(self, model, device='cpu', batch=10, dim = 3,
                  T=200, T_fit=5, deterministic=False):
-
+        """
+        Sampler for the Approximated Grasp Annealed Langevin Dynamics
+        Args:
+            model: Energy model
+            device: Device to run the model
+            batch: Batch size (number of grasps to generate)
+            dim: Dimension of the SE(3) group
+            T: Number of Langevin Dynamics steps, if deterministic is False
+            T_fit: Number of deterministic optimization steps for
+        """
         self.model = model
         self.device = device
         self.dim = dim
@@ -26,6 +35,13 @@ class ApproximatedGrasp_AnnealedLD():
         return np.sqrt((sigma ** (2 * t) - 1.) / (2. * np.log(sigma)))
 
     def _step(self, H0, t, noise_off=True):
+        """
+        Langevin Dynamics step
+        Args:
+            H0: Initial pose
+            t: Current time step
+            noise_off: If True, no noise is added
+        """
         ## Phase
         eps = 1e-3
         phase = ((self.T - t)/self.T) + eps
@@ -64,7 +80,6 @@ class ApproximatedGrasp_AnnealedLD():
         return H1.to_matrix()
 
     def sample(self, save_path=False, batch=None):
-
         ## 1.Sample initial SE(3) ##
         if batch is None:
             batch = self.batch

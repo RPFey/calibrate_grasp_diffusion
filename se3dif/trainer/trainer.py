@@ -59,7 +59,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
     ## Build saving directories
     makedirs(model_dir)
-    
     summaries_dir = os.path.join(model_dir, 'summaries')
     checkpoints_dir = os.path.join(model_dir, 'checkpoints')
     
@@ -88,11 +87,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
     with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
         train_losses = []
         for epoch in range(start_epochs, epochs):
-            # if not epoch % epochs_til_checkpoint and epoch and rank == 0:
-            #     torch.save(model.state_dict(),
-            #                os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
-            #     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_%04d_iter_%06d.pth' % (epoch, total_steps)),
-            #                np.array(train_losses))
 
             # aps = []
             model.train()
@@ -101,6 +95,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 gt = dict_to_device(gt, device)
                 
                 if cm.should_exit():
+                    writer.close()
                     cm.requeue()
 
                 forward_start_time = time.time()
@@ -180,6 +175,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 torch.save(state_dict, os.path.join(checkpoints_dir, 'model_current.pth'))
                 
                 # this function is weird ... 
+                # TODO Uncomment these lines for visualization. 
+                # It does not work on a40 card and will cause memory issue.
                 # if summary_fn is not None:
                 #     summary_fn(model, model_input, gt, iter_info, writer, total_steps)
             
@@ -210,6 +207,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                             bap = BinaryAveragePrecision(thresholds=None)
                             
                             if cm.should_exit():
+                                writer.close()
                                 cm.requeue()
                             
                             # The visual context is already set in the loss function here ! 
@@ -276,6 +274,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                         else:
                             single_loss = np.mean(loss)
                             writer.add_scalar('val_' + loss_name, single_loss, total_steps)
+                            # TODO Uncomment these lines for visualization. 
+                            # It does not work on a40 card and will cause memory issue.
                             # if summary_fn is not None:
                             #     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
                     
@@ -293,5 +293,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
         }   
         torch.save(state_dict, os.path.join(checkpoints_dir, 'model_final.pth'))
         # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_final.txt'), np.array(train_losses))
-
+        
+        writer.close()
         return model, optimizers

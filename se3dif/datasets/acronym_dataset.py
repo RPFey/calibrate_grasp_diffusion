@@ -277,11 +277,11 @@ class PointcloudAcronymAndSDFDataset(Dataset):
                                    'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
                  se3=False, phase='train', one_object=False,
                  n_pointcloud = 1000, n_density = 200, n_coords = 1000,
-                 augmented_rotation=True, visualize=False, split = True):
+                 augmented_rotation=True, visualize=False, split = True, data_src = None):
 
         # class_type = ['Mug']
         self.class_type = class_type
-        self.data_dir = get_data_src()
+        self.data_dir = get_data_src() if data_src is None else data_src
 
         self.grasps_dir = os.path.join(self.data_dir, 'grasps')
 
@@ -628,10 +628,10 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
     def __init__(self, class_type=['Cup', 'Mug', 'Fork', 'Hat', 'Bottle'],
                  se3=False, phase='train', one_object=False,
                  n_pointcloud = 1000, n_density = 200, n_coords = 1000,
-                 augmented_rotation=True, visualize=False, split = True, test_files=None):
+                 augmented_rotation=True, visualize=False, split = True, test_files=None, data_src = None):
 
         self.class_type = class_type
-        self.data_dir = get_data_src()
+        self.data_dir = get_data_src() if data_src is None else data_src
 
         self.grasps_dir = os.path.join(self.data_dir, 'grasps')
 
