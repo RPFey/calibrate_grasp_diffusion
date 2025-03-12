@@ -1,0 +1,46 @@
+import os
+import argparse
+import matplotlib.pyplot as plt
+from tensorboard.backend.event_processing import event_accumulator
+
+def extract_metric_from_events(log_dir, metric_name):
+    metric_data = []
+    for root, _, files in os.walk(log_dir):
+        for file in files:
+            if "events.out.tfevents" in file:
+                file_path = os.path.join(root, file)
+                ea = event_accumulator.EventAccumulator(file_path)
+                ea.Reload()
+                
+                if metric_name in ea.Tags()["scalars"]:
+                    for event in ea.Scalars(metric_name):
+                        metric_data.append((event.step, event.value))
+    return metric_data
+
+def plot_metrics(src_dirs, metric_name):
+    plt.figure(figsize=(10, 6))
+    
+    for log_dir in src_dirs:
+        experiment_name = log_dir.strip('/').split("/")[-1]
+        metric_values = extract_metric_from_events(log_dir, metric_name)
+        
+        if metric_values:
+            steps, values = zip(*sorted(metric_values))
+            plt.plot(steps, values, label=experiment_name)
+        else:
+            print(f"No data found for {metric_name} in {log_dir}")
+    
+    plt.xlabel("Steps")
+    plt.ylabel(metric_name)
+    plt.title(f"{metric_name} over Time")
+    plt.legend()
+    plt.grid()
+    plt.savefig(f"{metric_name}.png")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Plot metrics from TensorBoard logs.")
+    parser.add_argument("--metric_name", type=str, required=True, help="Name of the metric to plot")
+    parser.add_argument("--src", type=str, nargs='+', required=True, help="Paths to TensorBoard log directories")
+    args = parser.parse_args()
+    
+    plot_metrics(args.src, args.metric_name)

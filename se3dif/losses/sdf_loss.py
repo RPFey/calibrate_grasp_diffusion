@@ -39,7 +39,7 @@ class SDFLoss():
 
 
 class CELoss():
-    def __init__(self, field='ce', eps=1e-3, T = 30):
+    def __init__(self, field='ce', eps=1e-6, T = 30):
         self.field = field
         self.eps = eps
         self.T = T
@@ -52,7 +52,7 @@ class CELoss():
         pos_num = label.shape[0]
         
         labels = torch.cat((label, n_label), dim=0)
-        final_t = torch.ones((labels.shape[0], )).to(labels.device) * (1 / self.T) + self.eps
+        final_t = torch.rand((labels.shape[0], )).to(labels.device) * (1 - self.eps) + self.eps
         logits = model.get_logits(labels, final_t).view(-1)
         prob = torch.sigmoid(logits)
         
@@ -184,7 +184,7 @@ class APLossImpl (nn.Module):
     
     
 class APLoss():
-    def __init__(self, field='ap', eps=1e-3, T = 30):
+    def __init__(self, field='ap', eps=1e-6, T = 30):
         self.field = field
         self.eps = eps
         self.T = T
@@ -199,7 +199,7 @@ class APLoss():
         batch_size = grasps.shape[0]
         grasps = grasps.view(-1, 4, 4)
 
-        final_t = torch.ones((grasps.shape[0], )).to(grasps.device) * (1 / self.T) + self.eps
+        final_t = torch.rand((grasps.shape[0], )).to(grasps.device) * (1. - self.eps) + self.eps
         logits = model.get_logits(grasps, final_t).view(-1)
         prob = torch.sigmoid(logits)
         prob = prob.reshape(batch_size, -1) # (B, N)
