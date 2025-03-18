@@ -12,10 +12,10 @@
 #SBATCH --qos=normal
 #SBATCH --time=1-00:00:00
 #SBATCH --signal=SIGUSR1@180
-#SBATCH --output=./logs/complete/%x-%j.out
+#SBATCH --output=./logs/partial/%x-%j.out
 
 cd ~/calibrate_grasp_diffusion
-mkdir -p logs/complete
+mkdir -p logs/partial
 
 SPEC_FILE=$1
 
@@ -29,6 +29,6 @@ export PYOPENGL_PLATFORM=egl
 whereis python3.11
 srun python3.11 \
         scripts/train/train_scene_pointcloud_6d_grasp_diffusion.py \
-        --spec_file ${SPEC_FILE} --saving_root ./logs/complete/ \
-        --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/scene_2048/ \
+        --spec_file ${SPEC_FILE} --saving_root ./logs/partial/ \
+        --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048/ \
         --num_workers 24

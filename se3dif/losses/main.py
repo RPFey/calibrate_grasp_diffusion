@@ -1,5 +1,5 @@
 from .denoising_loss import *
-from .sdf_loss import SDFLoss, CELoss, DirichletLoss, APLoss
+from .sdf_loss import SDFLoss, CELoss, DirichletLoss, APLoss, DirichletAPLoss
 
 def get_losses(args):
     losses = args['Losses']
@@ -23,6 +23,8 @@ def get_losses(args):
         loss_fns['dirichlet'] = DirichletLoss()
     if 'aploss' in losses:
         loss_fns['aploss'] = APLoss()
+    if 'dirichlet_aploss' in losses:
+        loss_fns['dirichlet_aploss'] = DirichletAPLoss()
 
     loss_dict = LossDictionary(loss_dict=loss_fns)
     return loss_dict
