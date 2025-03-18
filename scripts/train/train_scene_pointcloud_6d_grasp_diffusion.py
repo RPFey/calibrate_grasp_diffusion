@@ -1,4 +1,5 @@
 import os
+import glob
 
 # set pyglet to headless mode
 if os.environ.get('PYOPENGL_PLATFORM', '') == 'egl':
@@ -11,12 +12,11 @@ from se3dif.utils import get_root_src
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from se3dif import datasets, losses, summaries, trainer
 from se3dif.models import loader
-
 from se3dif.utils import load_experiment_specifications
-
 from se3dif.trainer.learning_rate_scheduler import get_learning_rate_schedules
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
@@ -47,8 +47,14 @@ def parse_args():
     
     p.add_argument("--data_root", type=str, default=os.path.join(root_dir, 'data', 'scene_sdf')
                    , help='root for saving logging')
+    
+    p.add_argument('--eval', action='store_true', default=False, help='evaluate model')
+    
+    p.add_argument('--eval_ckpt', type=str, default=None, help='checkpoint to evaluate, \
+                    if None, evaluate all the checkpoints in the model directory')
 
-    p.add_argument('--device',  type=str, default='cuda',)
+    p.add_argument('--device',  type=str, default='cuda')
+    
     p.add_argument('--class_type', type=str, default='Mug')
 
     opt = p.parse_args()
@@ -115,14 +121,37 @@ def main(opt):
         ])
 
     # Train
-    trainer.train(model=model.float(), train_dataloader=train_dataloader, epochs=args['TrainSpecs']['num_epochs'], model_dir= exp_dir,
-                summary_fn=summary, device=device, lr=1e-4, optimizers=[optimizer],
-                steps_til_summary=args['TrainSpecs']['steps_til_summary'],
-                epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
-                loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
-                clip_grad=False, val_loss_fn=val_loss_fn, overwrite=True,
-                val_dataloader=test_dataloader)
+    if not opt.eval:
+        trainer.train(model=model.float(), train_dataloader=train_dataloader, epochs=args['TrainSpecs']['num_epochs'], model_dir= exp_dir,
+                    summary_fn=summary, device=device, lr=1e-4, optimizers=[optimizer],
+                    steps_til_summary=args['TrainSpecs']['steps_til_summary'],
+                    epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
+                    loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
+                    clip_grad=False, val_loss_fn=val_loss_fn, overwrite=True,
+                    val_dataloader=test_dataloader)
+    else:
+        if opt.eval_ckpt is not None:            
+            states = torch.load(opt.eval_ckpt, map_location=device)
+            model.load_state_dict(states['model_state'], strict=True)
+            total_steps = states['steps']   
+            start_epochs = total_steps // len(train_dataloader)
+            trainer.eval(model=model, val_dataloader=test_dataloader, logdir=exp_dir, summary_fn=summary,
+                            loss_fn=loss_fn, device=device, epoch = start_epochs, total_steps = total_steps)
 
+        else:
+            checkpoints_dir = os.path.join(exp_dir, 'checkpoints')
+            writer = SummaryWriter(os.path.join(exp_dir, 'eval_summaries'))
+            ckpts = glob.glob(os.path.join(checkpoints_dir, 'model_epoch_????_iter_??????.pth'))
+            ckpts.sort()
+            for ckpt in ckpts:
+                print(" Evaluate checkpoint: ", ckpt)
+                states = torch.load(ckpt, map_location=device)
+                model.load_state_dict(states['model_state'], strict=True)
+                total_steps = states['steps']   
+                start_epochs = total_steps // len(train_dataloader)
+
+                trainer.eval(model=model, val_dataloader=test_dataloader, loss_fn=loss_fn, logdir=exp_dir, summary_fn=summary,
+                                 device=device, writer=writer, epoch = start_epochs, total_steps = total_steps)
 
 if __name__ == '__main__':
     args = parse_args()

@@ -1,3 +1,11 @@
+# This script is used to summarize multiple tensorboard logs from different experiments.
+# It reads the logs from the tensorboard log directories and plots the metric in a single figure.
+# The plot is saved as <metric_name>.png in the current directory.
+# Usage:
+# python summarize.py --metric_name loss --src path/to/experiment1 path/to/experiment2
+#
+
+
 import os
 import argparse
 import matplotlib.pyplot as plt

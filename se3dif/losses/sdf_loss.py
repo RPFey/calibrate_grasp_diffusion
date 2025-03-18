@@ -90,8 +90,8 @@ class DirichletLoss():
         pos_num = label.shape[0]
         
         labels = torch.cat((label, n_label), dim=0)
-        final_t = torch.ones((labels.shape[0], )).to(labels.device) * (1 / self.T) + self.eps
-        logits = model.get_logits(labels, final_t) # (N, 2)
+        random_t = torch.rand((labels.shape[0], )).to(labels.device) * (1 - self.eps) + self.eps
+        logits = model.get_logits(labels, random_t) # (N, 2)
         alphas = logits + 1
         S = alphas.sum(dim=-1, keepdim=True) # (N, 1)
         ps = alphas / S
@@ -210,4 +210,37 @@ class APLoss():
 
         loss_dict[self.field] = ap_loss
         info = {'ap': 1 - ap_loss.item()}
+        return loss_dict, info
+    
+class DirichletAPLoss():
+    def __init__(self, field='dirichlet_ap', eps=1e-6, T = 30):
+        self.field = field
+        self.eps = eps
+        self.T = T
+        self.ap_impl = APLossImpl()
+        self.ap_impl.to(torch.device("cuda:0"))
+
+    def __call__(self, model:models.GraspDiffusionFields, model_input,
+                    ground_truth, val=False):
+        loss_dict = dict()
+        grasps = torch.cat([model_input["x_ene_pos"], model_input["x_neg_ene"]], dim = 1) # (B, N, 4, 4)
+        pos_num = model_input["x_ene_pos"].shape[1]
+        batch_size = grasps.shape[0]
+        grasps = grasps.view(-1, 4, 4)
+
+        random_t = torch.rand((grasps.shape[0], )).to(grasps.device) * (1 - self.eps) + self.eps
+        logits = model.get_logits(grasps, random_t) # (BN, 2)
+        alphas = logits + 1
+        S = alphas.sum(dim=-1, keepdim=True) # (BN, 1)
+        ps = alphas / S
+        ps = ps.view(batch_size, -1, 2)
+        
+        targets = torch.zeros_like(ps)
+        targets[:, :pos_num, 0] = 1
+        targets[:, pos_num:, 1] = 1
+        
+        ap_loss = self.ap_impl(ps[..., 0], targets[..., 0]) # + \
+                    # self.ap_impl(ps[..., 1], targets[..., 1])
+        
+        info = {'ap': 1 - ap_loss.item()} 
         return loss_dict, info

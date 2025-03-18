@@ -6,9 +6,10 @@ import torch
 
 from collections import defaultdict
 
+import matplotlib.pyplot as plt
 from se3dif.utils import makedirs, dict_to_device, ClusterStateManager
 from torch.utils.tensorboard import SummaryWriter
-from torchmetrics.classification import BinaryAveragePrecision
+from torchmetrics.classification import BinaryAveragePrecision, BinaryPrecisionRecallCurve
 from tqdm.autonotebook import tqdm
 import logging
 
@@ -81,7 +82,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
         makedirs(checkpoints_dir)
 
         exp_name = datetime.datetime.now().strftime("%m.%d.%Y %H:%M:%S")
-        writer = SummaryWriter(summaries_dir+ '/' + exp_name)
+        writer = SummaryWriter(summaries_dir + '/' + exp_name)
         logging.basicConfig(filename=os.path.join(summaries_dir, exp_name, 'training.log'), level=logging.INFO)
 
     with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
@@ -192,96 +193,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 
                 # evaltion 
                 if val_dataloader is not None:
-                    # sample poses 
-                    from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
-
-                    with torch.no_grad():
-                        model.eval()
-                        aps = []
-                        
-                        # compute val loss
-                        val_losses = defaultdict(list)
-                        for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
-                            model_input = dict_to_device(model_input, device)
-                            gt = dict_to_device(gt, device)
-                            bap = BinaryAveragePrecision(thresholds=None)
-                            
-                            if cm.should_exit():
-                                writer.close()
-                                cm.requeue()
-                            
-                            # The visual context is already set in the loss function here ! 
-                            val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
-                            
-                            # sample grasps
-                            H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
-                            num_grasps = H_grasps.shape[1]
-                            generator = Grasp_AnnealedLD(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
-                            H_sampled = generator.sample()[0] # (B, N, 4, 4)
-                            H_sampled = H_sampled.unsqueeze(0)
-                        
-                            # compute the angular and translation distance between H and H_grasps
-                            difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
-                            acc_matches = torch.min(difference, dim=2)[0]
-                            recall_matches = torch.min(difference, dim=1)[0]
-                            
-                            # Binary Classfication AP
-                            if "x_neg_ene" in model_input:
-                                p_pose, f_pose = model_input["x_ene_pos"].view(-1, 4, 4), model_input["x_neg_ene"].view(-1, 4, 4)
-                                pos_num = p_pose.shape[0]
-                                
-                                poses = torch.cat((p_pose, f_pose), dim=0)
-                                final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
-                                logprob = -1 * model(poses, final_t).view(-1)
-                                
-                                if model.distribution != 'direct':
-                                    pred = torch.exp(logprob)
-                                else:
-                                    # for direct ("Bolzman"), simply normalize to [0, 1]
-                                    # it will not change the order and affect AP computation
-                                    pred = (logprob - logprob.min()) / (logprob.max() - logprob.min())
-                                
-                                label = torch.ones(pred.shape[0]).to(pred.device).long()
-                                label[pos_num:] = 0
-                                bap(pred, label)      
-                                aps.append(bap.compute().item())                              
-
-                            for name, value in val_loss.items():
-                                val_losses[name].append(value.cpu().numpy())
-                                
-                            val_losses["acc_avg_angular"].append(acc_matches[:, :, 0].mean().item())
-                            val_losses["acc_avg_translation"].append(acc_matches[:, :, 1].mean().item())
-                            val_losses["acc"].append(
-                                torch.sum(
-                                    torch.bitwise_and(acc_matches[:, :, 0] < 5 * np.pi / 180, acc_matches[:, :, 1] < 0.05)
-                                ).item()
-                            )
-                            
-                            val_losses['rec_avg_angular'].append(recall_matches[:, :, 0].mean().item())
-                            val_losses['rec_avg_translation'].append(recall_matches[:, :, 1].mean().item())
-                            val_losses["recall"].append(
-                                torch.sum(
-                                    torch.bitwise_and(recall_matches[:, :, 0] < 5 * np.pi / 180, recall_matches[:, :, 1] < 0.05)
-                                ).item()
-                            )
-                            val_losses['total'].append(num_grasps)
-                                
-                    for loss_name, loss in val_losses.items():
-                        if loss_name in ['total', 'acc']:
-                            if loss_name == 'acc':
-                                acc_rate = sum(val_losses['acc']) / sum(val_losses['total'])
-                                writer.add_scalar('val_acc', acc_rate, total_steps)
-                        else:
-                            single_loss = np.mean(loss)
-                            writer.add_scalar('val_' + loss_name, single_loss, total_steps)
-                            # TODO Uncomment these lines for visualization. 
-                            # It does not work on a40 card and will cause memory issue.
-                            # if summary_fn is not None:
-                            #     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
-                    
-                    mAP = np.array(aps).mean()
-                    print(f"Ep {epoch}, Validation mAP: {mAP}")
-                    writer.add_scalar('val_mAP', mAP, total_steps)
+                    eval(model, val_dataloader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn,
+                         device=device, writer=writer, epoch=epoch, total_steps=total_steps)
             
             if max_steps is not None and total_steps==max_steps:
                 break
@@ -296,3 +209,123 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
         
         writer.close()
         return model, optimizers
+    
+
+@torch.no_grad()
+def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
+            device=torch.device("cuda:0"),  writer=None, epoch = 0, total_steps = 0):
+    # sample poses 
+    from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
+    model.eval()
+    # aps = []
+    bap = BinaryAveragePrecision(thresholds=None)
+    bprc = BinaryPrecisionRecallCurve(thresholds=None) 
+    
+    # compute val loss
+    val_losses = defaultdict(list)
+    for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
+        model_input = dict_to_device(model_input, device)
+        gt = dict_to_device(gt, device)
+        
+        if cm.should_exit():
+            if writer is not None:
+                writer.close()
+            cm.requeue()
+        
+        # The visual context is already set in the loss function here ! 
+        val_loss, val_iter_info = loss_fn(model, model_input, gt, val=True)
+        
+        # sample grasps
+        H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
+        num_grasps = H_grasps.shape[1]
+        generator = Grasp_AnnealedLD(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
+        H_sampled = generator.sample()[0] # (B, N, 4, 4)
+        H_sampled = H_sampled.unsqueeze(0)
+    
+        # compute the angular and translation distance between H and H_grasps
+        difference = compute_difference(H_sampled, H_grasps) # (B, N, N, 2)
+        acc_matches = torch.min(difference, dim=2)[0]
+        recall_matches = torch.min(difference, dim=1)[0]
+        
+        # Binary Classfication AP
+        if "x_neg_ene" in model_input:
+            p_pose, f_pose = model_input["x_ene_pos"].view(-1, 4, 4), model_input["x_neg_ene"].view(-1, 4, 4)
+            pos_num = p_pose.shape[0]
+            
+            poses = torch.cat((p_pose, f_pose), dim=0)
+            final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
+            logprob = -1 * model(poses, final_t).view(-1)
+            
+            if model.distribution != 'direct':
+                pred = torch.exp(logprob)
+            else:
+                # for direct ("Bolzman"), simply normalize to [0, 1]
+                # it will not change the order and affect AP computation
+                pred = (logprob - logprob.min()) / (logprob.max() - logprob.min())
+            
+            label = torch.ones(pred.shape[0]).to(pred.device).long()
+            label[pos_num:] = 0
+            bap.update(pred, label) 
+            bprc.update(pred, label)
+            # aps.append(bap.compute().item())    
+            
+        # TODO Uncomment these lines for visualization. 
+        # It does not work on a40 card and will cause memory issue.
+        # if summary_fn is not None:
+        #     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
+        
+        for name, value in val_loss.items():
+            val_losses[name].append(value.cpu().numpy())
+            
+        val_losses["acc_avg_angular"].append(acc_matches[:, :, 0].mean().item())
+        val_losses["acc_avg_translation"].append(acc_matches[:, :, 1].mean().item())
+        val_losses["acc"].append(
+            torch.sum(
+                torch.bitwise_and(acc_matches[:, :, 0] < 5 * np.pi / 180, acc_matches[:, :, 1] < 0.05)
+            ).item()
+        )
+        
+        val_losses['rec_avg_angular'].append(recall_matches[:, :, 0].mean().item())
+        val_losses['rec_avg_translation'].append(recall_matches[:, :, 1].mean().item())
+        val_losses["recall"].append(
+            torch.sum(
+                torch.bitwise_and(recall_matches[:, :, 0] < 5 * np.pi / 180, recall_matches[:, :, 1] < 0.05)
+            ).item()
+        )
+        val_losses['total'].append(num_grasps)
+        
+    mAP = bap.compute().item() # np.array(aps).mean()
+    fig_, ax_ = bprc.plot(score=True)
+    # save the pr curve stats from bprc
+    
+    print(f"Ep {epoch}, Validation mAP: {mAP}")
+    stats = {}
+    if writer is not None:
+        writer.add_scalar('val_mAP', mAP, total_steps)
+        writer.add_figure('val_precision_recall_curve', fig_, total_steps)
+    else:
+        stats['val_mAP'] = mAP
+        precision, recall, thresholds = bprc.compute()
+        # convert to numpy
+        precision, recall, thresholds = precision.cpu().numpy(), recall.cpu().numpy(), thresholds.cpu().numpy()
+        fig_.savefig(os.path.join(logdir, 'precision_recall_curve.png'))
+        np.savez(os.path.join(logdir, 'precision_recall_curve.npz'), precision=precision, recall=recall, thresholds=thresholds)
+      
+    for loss_name, loss in val_losses.items():
+        if loss_name in ['total', 'acc']:
+            if loss_name == 'acc':
+                acc_rate = sum(val_losses['acc']) / sum(val_losses['total'])
+                if writer is not None:
+                    writer.add_scalar('val_acc', acc_rate, total_steps)
+                else:
+                    stats['val_acc'] = acc_rate
+        else:
+            single_loss = np.mean(loss)
+            if writer is not None:
+                writer.add_scalar('val_' + loss_name, single_loss, total_steps)
+            else:
+                stats['val_' + loss_name] = single_loss
+            
+    import pprint
+    pprint.pprint(stats)
+        
