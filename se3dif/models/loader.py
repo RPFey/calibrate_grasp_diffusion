@@ -52,6 +52,8 @@ def load_model(args)->models.GraspDiffusionFields:
                                                                       args['pretrained_model']))
         args["NetworkArch"] = model_args["NetworkArch"]
         args["NetworkSpecs"] = model_args["NetworkSpecs"]
+        args["num_scene_points"] = model_args.get("num_scene_points", -1)
+        args["num_target_points"] = model_args.get("num_target_points", -1)
 
     if args['NetworkArch'] == 'GraspDiffusion':
         model = load_grasp_diffusion(args)
@@ -61,7 +63,10 @@ def load_model(args)->models.GraspDiffusionFields:
     if 'pretrained_model' in args:
         model_path = os.path.join(pretrained_models_dir, args['pretrained_model'], 'model.pth')
         states = torch.load(model_path)
-        model.load_state_dict(states['model_state'])
+        if 'model_state' in states:
+            model.load_state_dict(states['model_state'])
+        else:
+            model.load_state_dict(states)
 
         if args['device'] != 'cpu':
             model = model.to(args['device'], dtype=torch.float32)
