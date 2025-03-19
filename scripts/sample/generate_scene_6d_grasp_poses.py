@@ -1,12 +1,8 @@
 # This script generates 6D grasp poses for a scene point cloud 
 # and use viser to visualize the scene and the generated grasps.
 # Usage:
-# python scripts/sample/generate_scene_6d_grasp_poses.py --spec_file <path_to_spec_file> --ckpt <path_to_ckpt>
+# python scripts/sample/generate_scene_6d_grasp_poses.py
 #
-# Example:
-# python scripts/sample/generate_scene_6d_grasp_poses.py --spec_file /home/leiboshu/calibrate_grasp_diffusion/scripts/train/params/multiobject_scene_graspdif_bernoulli \
-#               --ckpt logs/model_current.pth
-# 
 # Specify the scene as .npz in the viser gui.
 # npz file should contain "scene_pts" (N, 3) and "target_index" (N,) where target_index == 1 for target points and 0 for scene points.
 
@@ -38,24 +34,34 @@ class ViserVisualizer:
         self._add_names = []
         self.num_grasps = 16
         
+        self.model_spec_handle = self.server.gui.add_text(
+            "Model Spec",
+            "/path/to/spec"
+        )
+        self.model_spec_handle.on_update(self._on_model_spec_change)
+        
+        self.model_weight_handle = self.server.gui.add_text(
+            "Model Weight",
+            "/path/to/ckpt"
+        )
+        self.model_weight_handle.on_update(self._on_model_weight_change)
+        
         self.text_handle = self.server.gui.add_text(
             "Scene File",
             "Scene"
         )
         self.text_handle.on_update(self._on_text_change)
         
-        # self.grasp_number_handle = self.server.gui.add_slider(
-        #     "Grasp Number",
-        #     1, 32, 1, self.num_grasps
-        # )
-        # self.grasp_number_handle.on_update(self._on_grasp_number_change)
+        self.grasp_number_handle = self.server.gui.add_number(
+            "Grasp Number",
+            self.num_grasps
+        )
+        self.grasp_number_handle.on_update(self._on_grasp_number_change)
         
-        model_args = load_experiment_specifications(args.spec_file)
-        model_args['device'] = device
-        self.model = load_model(model_args)
-        self.model.to(device)
-        self.model.load_state_dict(torch.load(args.ckpt, map_location=device)["model_state"])
-        self.sampler = Grasp_AnnealedLD(self.model, batch=self.num_grasps, T=30, T_fit=50, device=device)
+        self.model = None
+        self.sampler = None
+        self._pts = None
+        self._label = None
         
     def _on_text_change(self, x):
         print(f"File Load: {x.target.value}")
@@ -95,15 +101,17 @@ class ViserVisualizer:
         # self.server.scene.add_point_cloud("scene_pcd", points=pts / self.scale, colors=colors, point_size=0.001)
         # self._add_names.append("scene_pcd")
         
-        pts = to_torch(pts).to(device).view(1, -1, 3)
-        label = to_torch(label).to(device).view(1, -1, 1)
-        self.model.set_latent(pts, label)
-        grasps, energy = self.sampler.sample()
+        self._pts = to_torch(pts).to(device).view(1, -1, 3)
+        self._label = to_torch(label).to(device).view(1, -1, 1)
         
-        grasps = to_numpy(grasps)  
-        # negate energy so that low energy -> bright color
-        energy = -1 * to_numpy(energy).reshape(-1)
-        self.visualize_grasp(grasps, energy)
+        if self.model is not None and self.sampler is not None:
+            self.model.set_latent(self._pts, self._label)
+            grasps, energy = self.sampler.sample()
+        
+            grasps = to_numpy(grasps)  
+            # negate energy so that low energy -> bright color
+            energy = -1 * to_numpy(energy).reshape(-1)
+            self.visualize_grasp(grasps, energy)
         
     def visualize_grasp(self, grasps, energy):
         """
@@ -111,7 +119,7 @@ class ViserVisualizer:
             grasps: (num_grasps, 4, 4) array of grasps
             energy: (num_grasps,) array of energy values
         """
-        energy = (energy - np.min(energy)) / (np.max(energy) - np.min(energy))
+        energy = (energy - np.min(energy)) / (np.max(energy) - np.min(energy) + 1e-6)
         cmap = plt.get_cmap('viridis')
         colors = cmap(energy)
         
@@ -124,6 +132,46 @@ class ViserVisualizer:
             gripper.visual.vertex_colors = np.tile(c, (len(gripper.vertices), 1))
             self._add_element(f"/grasp/gripper_{i}", self.server.scene.add_mesh_trimesh, gripper)
             # self.server.scene.add_mesh_trimesh(f"gripper_{i}", gripper)
+            
+    def _on_model_spec_change(self, x):
+        print(f"Model Spec: {x.target.value}")
+        # clean grasps
+        for i in range(self.num_grasps):
+            self._remove_name_if_exists(f"/grasp/gripper_{i}")
+            
+        model_args = load_experiment_specifications(x.target.value)
+        model_args['device'] = device
+        self.model = load_model(model_args)
+        self.model.to(device)
+        self.sampler = Grasp_AnnealedLD(self.model, batch=self.num_grasps, T=30, T_fit=50, device=device)
+        self.model_weight_handle.value = "/path/to/ckpt"
+        print(" Model Constructed ! ")  
+    
+    def _on_model_weight_change(self, x):
+        try:
+            if not os.path.exists(x.target.value):
+                print(f"File {x.target.value} does not exist")
+                return
+            
+            model_states = torch.load(x.target.value, map_location=device)
+        except (FileNotFoundError, IsADirectoryError) as e:
+            print(f"File {x.target.value} not found")
+            return
+            
+        # clean grasps
+        for i in range(self.num_grasps):
+            self._remove_name_if_exists(f"/grasp/gripper_{i}")
+            
+        print(f"Model Weight: {x.target.value}")
+        self.model.load_state_dict(model_states["model_state"])
+        
+        if self._pts is not None and self._label is not None:
+            self.model.set_latent(self._pts, self._label)
+            grasps, energy = self.sampler.sample()
+            grasps = to_numpy(grasps)  
+            # negate energy so that low energy -> bright color
+            energy = -1 * to_numpy(energy).reshape(-1)
+            self.visualize_grasp(grasps, energy)
         
     @staticmethod 
     def fps_sample(points, num_pts):
@@ -148,8 +196,20 @@ class ViserVisualizer:
         self._add_names.clear()
         
     def _on_grasp_number_change(self, x):
+        # clean grasps
+        for i in range(self.num_grasps):
+            self._remove_name_if_exists(f"/grasp/gripper_{i}")
+            
         self.num_grasps = x.target.value
         self.sampler = Grasp_AnnealedLD(self.model, batch=self.num_grasps, T=30, T_fit=50, device=device)
+
+        if self._pts is not None and self._label is not None:
+            self.model.set_latent(self._pts, self._label)
+            grasps, energy = self.sampler.sample()
+            grasps = to_numpy(grasps)  
+            # negate energy so that low energy -> bright color
+            energy = -1 * to_numpy(energy).reshape(-1)
+            self.visualize_grasp(grasps, energy)
 
 def main(args):
     server = ViserVisualizer(args) 
@@ -162,8 +222,6 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8080, help='Port to run the server on')
-    parser.add_argument('--spec_file', type=str, help='path to the experiment specifications file')
-    parser.add_argument('--ckpt', type=str, help='path to the model ckeckpoint')
     parser.add_argument
     args = parser.parse_args()
     
