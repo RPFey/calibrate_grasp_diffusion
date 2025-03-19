@@ -512,8 +512,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         elif len(target_pts) < self.num_target_pts:
             rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts-len(target_pts))
             target_pts = np.concatenate([target_pts, target_pts[rix, ...]], axis=0)
-        mean = np.mean(target_pts, 0)
-
+        
         if self.num_scene_pts > 0:
             surr_pts = scene_pts[target_index == 0, :]
             if len(surr_pts) > self.num_scene_pts:
@@ -525,7 +524,6 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             pcl = np.concatenate([surr_pts, target_pts], axis=0)
         else:
             pcl = target_pts
-        pcl -= mean
         
         # sample grasps to num_grasps
         H_grasps = data['grasps']
@@ -550,22 +548,27 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                 F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
         #######################
         
-        ## Random rotation ##
-        # R = special_ortho_group.rvs(3)
-        # H = np.eye(4)
-        # H[:3, :3] = R
-        # ## translate ##
-        # query_pts = query_pts - mean
-        # pcl = pcl - mean
-        # H_grasps[..., :3, -1] = H_grasps[..., :3, -1] - mean
-        # ## rotate ##
-        # pcl = np.einsum('mn,bn->bm',R, pcl)
-        # query_pts = np.einsum('mn,bn->bm',R, query_pts)
-        # H_grasps = np.einsum('mn,bnk->bmk', H, H_grasps)
-        
         # concatenate target index
         target_index = np.zeros((len(pcl), 1))
         target_index[-self.num_target_pts:, :] = 1
+        
+        # centralize
+        mean = np.mean(target_pts, 0)
+        pcl -= mean
+        H_grasps[:, :3, -1] -= mean
+        F_grasps[:, :3, -1] -= mean
+        query_pts -= mean
+        
+        ## Random rotation Augmentation ##
+        if self.split == 'train':
+            R = special_ortho_group.rvs(3)
+            H = np.eye(4)
+            H[:3, :3] = R
+            ## rotate ##
+            pcl = np.einsum('mn,bn->bm', R, pcl)
+            query_pts = np.einsum('mn,bn->bm', R, query_pts)
+            H_grasps = np.einsum('mn,bnk->bmk', H, H_grasps)
+            F_grasps = np.einsum('mn,bnk->bmk', H, F_grasps)
 
         # Visualize
         if self.visualize:
@@ -600,10 +603,10 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         # do scaling here
         pcl = pcl * self.scale
         query_pts = query_pts * self.scale
+        sdf = sdf * self.scale
         H_grasps[..., :3, -1] = H_grasps[..., :3, -1] * self.scale
         F_grasps[..., :3, -1] = F_grasps[..., :3, -1] * self.scale
-        sdf = sdf * self.scale
-
+        
         # shape 
         # visual context - (N, 3); N = 1000 in original format
         # x_sdf - (M, 3); M = 1000
@@ -822,7 +825,7 @@ if __name__ == '__main__':
     # dataset = PartialPointcloudAcronymAndSDFDataset(visualize=False, augmented_rotation=True, one_object=False)
 
     dataset = PointcloudSceneAcronymAndSDFDataset(root_dir=opt.data_root, visualize=True)
-    dataset[0]
+    dataset[22]
 
     # train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
     # for x,y in train_dataloader:
