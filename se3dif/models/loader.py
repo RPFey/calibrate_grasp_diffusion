@@ -46,10 +46,10 @@ class Exp(nn.Module):
     def forward(self, x):
         return torch.exp(x)
     
-def load_model(args)->models.GraspDiffusionFields:
+def load_model(args, saving_root = None) -> models.GraspDiffusionFields:
+    pretrained_models_dir_ = saving_root if saving_root is not None else pretrained_models_dir 
     if 'pretrained_model' in args:
-        model_args = load_experiment_specifications(os.path.join(pretrained_models_dir,
-                                                                      args['pretrained_model']))
+        model_args = load_experiment_specifications(os.path.join(pretrained_models_dir_, args['pretrained_model']))
         args["NetworkArch"] = model_args["NetworkArch"]
         args["NetworkSpecs"] = model_args["NetworkSpecs"]
         args["num_scene_points"] = model_args.get("num_scene_points", -1)

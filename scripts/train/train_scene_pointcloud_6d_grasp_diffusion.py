@@ -89,7 +89,7 @@ def main(opt):
                                   shuffle=True, drop_last=True, pin_memory=True)
     test_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,  split='test',
                                                                 num_scene_pts=args["num_scene_points"], num_target_pts=args["num_target_points"])
-    test_dataloader = DataLoader(test_dataset, num_workers = 1, batch_size=1, shuffle=True, drop_last=True,
+    test_dataloader = DataLoader(test_dataset, num_workers = 1, batch_size=1, shuffle=False, drop_last=True,
                                  pin_memory=True)
 
     ## Model

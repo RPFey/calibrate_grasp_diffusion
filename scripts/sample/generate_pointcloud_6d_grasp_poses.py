@@ -43,7 +43,6 @@ def get_approximated_grasp_diffusion_field(p, args, device='cpu'):
 def sample_pointcloud(obj_id=0, obj_class='Mug'):
     acronym_grasps = AcronymGraspsDirectory(data_type=obj_class)
     mesh = acronym_grasps.avail_obj[obj_id].load_mesh()
-
     P = mesh.sample(1000)
 
     sampled_rot = scipy.spatial.transform.Rotation.random()
@@ -63,11 +62,7 @@ def sample_pointcloud(obj_id=0, obj_class='Mug'):
     H[:3,-1] = -P_mean
     mesh.apply_transform(H)
     translational_shift = copy.deepcopy(H)
-
-
-
     return P, mesh, translational_shift, rot_quat
-
 
 if __name__ == '__main__':
     import copy
@@ -88,8 +83,6 @@ if __name__ == '__main__':
     from se3dif.utils import to_numpy, to_torch
 
     import torch
-
-
 
     print('##########################################################')
     print('Object Class: {}'.format(args.obj_class))

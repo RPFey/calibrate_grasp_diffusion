@@ -43,5 +43,6 @@ def denoising_summary(model, model_input, ground_truth, info, writer, iter, pref
             writer.add_figure("diffusion/generated_grasps", figure, global_step=iter)
         else:
             plt.savefig(f"generated_grasps_{iter}.png")
+        plt.close()
     except pyglet.window.NoSuchConfigException as e:
         print("pyglet window not found, skipping grasp visualization")

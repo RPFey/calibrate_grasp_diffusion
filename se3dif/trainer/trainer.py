@@ -271,8 +271,8 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
             
         # TODO Uncomment these lines for visualization. 
         # It does not work on a40 card and will cause memory issue.
-        # if summary_fn is not None:
-        #     summary_fn(model, model_input, gt, val_iter_info, writer, total_steps, 'val_')
+        if summary_fn is not None and val_i % 10 == 0:
+            summary_fn(model, model_input, gt, val_iter_info, writer, int(total_steps * 1e3) + val_i, 'val_')
         
         for name, value in val_loss.items():
             val_losses[name].append(value.cpu().numpy())
