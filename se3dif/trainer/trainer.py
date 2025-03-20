@@ -221,6 +221,10 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
     bap = BinaryAveragePrecision(thresholds=None)
     bprc = BinaryPrecisionRecallCurve(thresholds=None) 
     
+    # log conformal score
+    preds = []
+    labels = []
+    
     # compute val loss
     val_losses = defaultdict(list)
     for val_i, (model_input, gt) in tqdm(enumerate(val_dataloader), desc='Validation'):
@@ -254,25 +258,22 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
             
             poses = torch.cat((p_pose, f_pose), dim=0)
             final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
-            logprob = -1 * model(poses, final_t).view(-1)
+            logprob = -1 * model(poses, final_t).view(-1)                
+            label = torch.ones(logprob.shape[0]).to(logprob.device).long()
+            label[pos_num:] = 0
             
             if model.distribution != 'direct':
                 pred = torch.exp(logprob)
+                preds.append(pred)
             else:
-                # for direct ("Bolzman"), simply normalize to [0, 1]
-                # it will not change the order and affect AP computation
-                pred = (logprob - logprob.min()) / (logprob.max() - logprob.min())
-            
-            label = torch.ones(pred.shape[0]).to(pred.device).long()
-            label[pos_num:] = 0
-            bap.update(pred, label) 
-            bprc.update(pred, label)
-            # aps.append(bap.compute().item())    
+                preds.append(logprob)
+                
+            labels.append(label)
             
         # TODO Uncomment these lines for visualization. 
         # It does not work on a40 card and will cause memory issue.
-        if summary_fn is not None and val_i % 10 == 0:
-            summary_fn(model, model_input, gt, val_iter_info, writer, int(total_steps * 1e3) + val_i, 'val_')
+        # if summary_fn is not None and val_i % 10 == 0:
+        #     summary_fn(model, model_input, gt, val_iter_info, writer, int(total_steps * 1e3) + val_i, 'val_')
         
         for name, value in val_loss.items():
             val_losses[name].append(value.cpu().numpy())
@@ -294,6 +295,17 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
         )
         val_losses['total'].append(num_grasps)
         
+    preds = torch.cat(preds, dim=0)
+    labels = torch.cat(labels, dim=0)
+    
+    # for direct ("Bolzman"), simply normalize to [0, 1]
+    # it will not change the order and affect AP computation
+    if model.distribution == 'direct':
+        preds = (preds - preds.min()) / (preds.max() - preds.min())
+    
+    bap.update(preds, labels) 
+    bprc.update(preds, labels)
+    
     mAP = bap.compute().item() # np.array(aps).mean()
     fig_, ax_ = bprc.plot(score=True)
     # save the pr curve stats from bprc
@@ -326,6 +338,22 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
             else:
                 stats['val_' + loss_name] = single_loss
             
+    # compute cp score
+    # S <=> 1 - pred ; F <=> pred
+    cp_score = labels * (1 - preds) + (1 - labels) * preds
+    
+    # find the 90% quantile of cp_score
+    cp_score = cp_score.cpu().numpy()
+    cp_score_90 = np.quantile(cp_score, 0.9)
+    cp_score_95 = np.quantile(cp_score, 0.95)
+    
+    if writer is not None:
+        writer.add_scalar('val_cp_90', cp_score_90, total_steps)
+        writer.add_scalar('val_cp_95', cp_score_95, total_steps)
+    else:
+        stats['val_cp_90'] = cp_score_90
+        stats['val_cp_95'] = cp_score_95
+    
     import pprint
     pprint.pprint(stats)
         
