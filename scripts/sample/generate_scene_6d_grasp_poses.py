@@ -119,8 +119,13 @@ class ViserVisualizer:
             grasps: (num_grasps, 4, 4) array of grasps
             energy: (num_grasps,) array of energy values
         """
-        energy = (energy - np.min(energy)) / (np.max(energy) - np.min(energy) + 1e-6)
+        if self.model.distribution == 'direct':
+            energy = (energy - np.min(energy)) / (np.max(energy) - np.min(energy) + 1e-6)
+        else:
+            energy = np.exp(energy)
+        
         cmap = plt.get_cmap('viridis')
+        # in scale of 0 - 1
         colors = cmap(energy)
         
         for i, (H, c) in enumerate(zip(grasps, colors)):

@@ -2,7 +2,7 @@
 # It reads the logs from the tensorboard log directories and plots the metric in a single figure.
 # The plot is saved as <metric_name>.png in the current directory.
 # Usage:
-# python summarize.py --metric_name loss --src path/to/experiment1 path/to/experiment2
+# python summarize.py --metric_name loss --src path/to/experiment1/summarizes path/to/experiment2/summarizes
 #
 
 
@@ -29,7 +29,7 @@ def plot_metrics(src_dirs, metric_name):
     plt.figure(figsize=(10, 6))
     
     for log_dir in src_dirs:
-        experiment_name = log_dir.strip('/').split("/")[-1]
+        experiment_name = log_dir.strip('/').split("/")[-2]
         metric_values = extract_metric_from_events(log_dir, metric_name)
         
         if metric_values:
