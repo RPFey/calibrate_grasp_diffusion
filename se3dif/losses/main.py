@@ -48,6 +48,9 @@ class LossDictionary():
         for field in self.fields:
             loss_fn_k = self.loss_dict[field]
             loss, info = loss_fn_k(model, model_input, ground_truth, val)
+            if loss is None:
+                print(f"{field} Loss is None, Skip")
+                continue
             losses = {**losses, **loss}
             infos = {**infos, **info}
 

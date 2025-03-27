@@ -487,20 +487,24 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         cls_name = filename.split('/')[-2]
         data = np.load(filename)
         scene_pts = data['scene_pts']
-        query_pts = data['xyz']
-        sdf = data['sdf']
         target_index = data['target_index']
-    
-        # sample_sdf
-        if len(query_pts) > self.num_target_pts:
-            rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts)
-            query_pts = query_pts[rix, ...]
-            sdf = sdf[rix]
-        elif len(query_pts) < self.num_target_pts:
-            rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts-len(query_pts))
-            query_pts = np.concatenate([query_pts, query_pts[rix, ...]], axis=0)
-            sdf = np.concatenate([sdf, sdf[rix]], axis=0)
         
+        try:
+            query_pts = data['xyz']
+            sdf = data['sdf']
+            
+            # sample_sdf
+            if len(query_pts) > self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts)
+                query_pts = query_pts[rix, ...]
+                sdf = sdf[rix]
+            elif len(query_pts) < self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts-len(query_pts))
+                query_pts = np.concatenate([query_pts, query_pts[rix, ...]], axis=0)
+                sdf = np.concatenate([sdf, sdf[rix]], axis=0)
+        except:
+            query_pts, sdf = np.zeros((1, 3)), np.zeros((1, ))
+    
         # sample points to num_scene_pts and num_target_pts
         target_pts = scene_pts[target_index > 0, :]
         if len(target_pts) > self.num_target_pts:
