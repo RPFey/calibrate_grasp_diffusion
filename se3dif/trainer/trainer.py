@@ -3,15 +3,31 @@ import time
 import datetime
 import numpy as np
 import torch
-
+from torch.util.data import DataLoader, Dataset
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
 from se3dif.utils import makedirs, dict_to_device, ClusterStateManager
+from se3dif.samplers.bullet_sampler import BulletEvaluator
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import BinaryAveragePrecision, BinaryPrecisionRecallCurve
 from tqdm.autonotebook import tqdm
 import logging
+
+class MultipleDataset(Dataset):
+    def __init__(self, datasets):
+        self.datasets = datasets
+        self.lengths = [len(dataset) for dataset in datasets]
+    
+    def __len__(self):
+        return sum(self.lengths)
+    
+    def __getitem__(self, idx):
+        for i, length in enumerate(self.lengths):
+            if idx < length:
+                return self.datasets[i][idx]
+            idx -= length
+        raise IndexError("Index out of range")
 
 # log to .log file
 cm = ClusterStateManager()
@@ -195,6 +211,26 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 if val_dataloader is not None:
                     eval(model, val_dataloader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn,
                          device=device, writer=writer, epoch=epoch, total_steps=total_steps)
+            
+                    # run bullet_evaluator
+                    tmp_dir = os.path.join(model_dir, 'tmp')
+                    evaluator = BulletEvaluator(tmp_dir)
+                    
+                    try:
+                        for n in range(2, 8):
+                            random_seeds = np.choice(1e4, (20, ), replace=False)
+                            # random sample 20 seeds from 
+                            
+                            for s in random_seeds:
+                                total, success = evaluator.evaluate_model(model, total_steps, n, s)
+                                if max(success) <= 0:
+                                    raise ValueError("Bullet evaluation failed")
+                    
+                    except ValueError as e:
+                        pass
+                        
+                    complementary_dataset = evaluator.get_dataset([total_steps], [2])
+                    train_dataloader.dataset = MultipleDataset([train_dataloader.dataset, complementary_dataset])
             
             if max_steps is not None and total_steps==max_steps:
                 break

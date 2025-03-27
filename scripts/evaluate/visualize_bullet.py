@@ -1,10 +1,10 @@
 # This script generates 6D grasp poses for a scene point cloud 
 # and use viser to visualize the scene and the generated grasps.
 # Usage:
-# python scripts/sample/generate_scene_6d_grasp_poses.py
-#
-# Specify the scene as .npz in the viser gui.
-# npz file should contain "scene_pts" (N, 3) and "target_index" (N,) where target_index == 1 for target points and 0 for scene points.
+# python script/evaluate/visualize_bullet.py --port 8080
+# 
+# Specify the scene as a folder, which contains .npz & .pkl files
+
 
 import viser
 import torch

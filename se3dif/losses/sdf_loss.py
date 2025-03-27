@@ -18,6 +18,11 @@ class SDFLoss():
                         model_input, ground_truth, val=False):
         loss_dict = dict()
         label = ground_truth[self.field].squeeze().reshape(-1)
+        
+        # single sdf is place holder
+        if label.shape[1] == 1:
+            print("SDF Loss: No SDF values to compute loss")
+            return None, None
 
         ## Set input ##
         x_sdf = model_input['x_sdf'].detach().requires_grad_()
