@@ -7,7 +7,7 @@ base_dir = os.path.abspath(os.path.dirname(__file__))
 pts_dir = os.path.join(base_dir)
 
 def get_3d_pts(
-        file = os.path.join(pts_dir,'UniformPts.npy'), 
+        filename = 'UniformPts.npy', 
         scale = np.ones(3), loc = np.zeros(3), n_points=100):
     """
         file: str 
@@ -18,6 +18,7 @@ def get_3d_pts(
             offset for Franka gripper is [0, 0, 0.06]
         n_points: number of points to
     """
+    file = os.path.join(pts_dir, filename)
     pts = np.load(file)
     # if len(pts) >= n_points:
     #     pcd = o3d.geometry.PointCloud()

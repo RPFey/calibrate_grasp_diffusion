@@ -6,7 +6,7 @@
   "num_scene_points": 512,
   "num_target_points": 512,
   "TrainSpecs": {
-    "batch_size": 24,
+    "batch_size": 8,
     "num_epochs": 20000,
     "steps_til_summary": 2500,
     "iters_til_checkpoint": 5000,
@@ -33,9 +33,9 @@
       "hidden_dim": 512
     },
     "points": {
-      "n_points": 30,
-      "loc": [0.0, 0.0, 0.5],
-      "scale": [0.7, 0.5, 0.7]
+      "n_points": 48,
+      "loc": [0.0, 0.0, 0.06],
+      "scale": [8.0, 8.0, 8.0]
     },
     "decoder": {
       "hidden_dim": 512
