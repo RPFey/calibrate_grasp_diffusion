@@ -164,11 +164,12 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
             weight_norm= feat_enc_params["weight_norm"]
         )
     # 3D Points
-    import pdb; pdb.set_trace()
     if 'loc' in points_params:
-        points = models.points.get_3d_pts(filename = "gripper_pts.npy",
+        pty_file = 'UniformPts.npy' if 'type' not in points_params else points_params['type']
+        points = models.points.get_3d_pts(filename = pty_file,
                                         n_points = points_params['n_points'], loc = np.array(points_params['loc']),
                                         scale = np.array(points_params['scale']))
+    
     else:
         points = models.points.get_3d_pts(n_points=points_params['n_points'])
     
