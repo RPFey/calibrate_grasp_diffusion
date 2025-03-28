@@ -20,9 +20,10 @@ from franka_env.btsim import Rotation, Transform, CameraIntrinsic
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class BulletEvaluator:
-    def __init__(self, save_dir, num_grasps = 512):
+    def __init__(self, save_dir, num_grasps = 512, save_data = True):
         self.num_grasps = num_grasps
         self.save_dir = save_dir
+        self.save_data = save_data
     
     def evaluate_model(self, model, total_timestep, num_objects, seed=42, viz=False):
         if isinstance(num_objects, int):
@@ -34,6 +35,7 @@ class BulletEvaluator:
         save_dir = os.path.join(self.save_dir, "{:06d}".format(total_timestep))
         os.makedirs(save_dir, exist_ok=True)
         
+        # record for each category given the current number of objects
         total_trials = []
         success_trials = []
         
@@ -136,13 +138,14 @@ class BulletEvaluator:
                         success_grasps = grasp_poses[results > 0]
                         failure_grasps = grasp_poses[results == 0]
                         
-                        np.savez(
-                            os.path.join(save_dir, f"seed{seed}-obj{num_object}-t{target}.npz"),
-                            scene_pts = complete_pc,
-                            target_index = target_index,
-                            grasps = success_grasps,
-                            F_grasps = failure_grasps,
-                        )
+                        if self.save_data:
+                            np.savez(
+                                os.path.join(save_dir, f"seed{seed}-obj{num_object}-t{target}.npz"),
+                                scene_pts = complete_pc,
+                                target_index = target_index,
+                                grasps = success_grasps,
+                                F_grasps = failure_grasps,
+                            )
                 
             success_trials.append(success_trial)
             total_trials.append(total_trial)
@@ -180,11 +183,17 @@ if __name__ == '__main__':
     args = argparse.ArgumentParser()
     args.add_argument("--spec_file", type=str, default="/root/spec")
     args.add_argument("--weight", type=str, default="/root/data/weights/ckpt.pth")
+    args.add_argument("--save_dir", type=str, default="/mnt/kostas-graid/datasets/boshu/grasp_buffer")
+    args.add_argument("--save_data", action='store_true', default=False, help='save the grasp data to disk')
     args.add_argument("--viz", action='store_true', default=False, help='visualize the grasps')
+    args.add_argument("--num_objects", type=int, default=2, help='number of objects to evaluate on')
+    args.add_argument("--num_seeds", type=int, default=2, help='number of seeds to test on')
     opt = args.parse_args()
 
-    save_dir = "/mnt/kostas-graid/datasets/boshu/grasp_buffer"
-    evaluator = BulletEvaluator(save_dir)
+    save_dir = opt.save_dir
+    evaluator = BulletEvaluator(save_dir, save_data=opt.save_data)
+    
+    assert opt.num_objects > 1, "Number of objects must be greater than 1"
     
     model_args = load_experiment_specifications(opt.spec_file)
     model_args['device'] = device
@@ -197,8 +206,18 @@ if __name__ == '__main__':
     else:
         model.load_state_dict(model_states)
     
-    for s in range(1):
-        evaluator.evaluate_model(model, 1000, 2, s, opt.viz)
+    for n in range(opt.num_objects):
+        total_exps = 0
+        success_exps = 0
+        for s in range(opt.num_seeds):
+            total_trials, success_trials = evaluator.evaluate_model(model, 1000, n, s, opt.viz)
+            total_exps += len(total_trials)
+            success_exps += np.sum(np.array(success_trials) > 0)
         
-    dataset = evaluator.get_dataset([], [2])
-    dataset[0]
+        print(f"Bullet Evaluation Results for Num. Objects {opt.num_objects} ")
+        print("Total Trials: ", total_exps)
+        print("Total Success: ", success_exps)
+    
+    # get dataset 
+    # dataset = evaluator.get_dataset([], [2])
+    # dataset[0]

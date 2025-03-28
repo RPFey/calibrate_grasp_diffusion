@@ -11,6 +11,7 @@ import torch
 import argparse
 import time
 import os
+import glob
 
 import open3d as o3d
 from pytorch3d.ops import sample_farthest_points
@@ -33,12 +34,19 @@ class ViserVisualizer:
         self.server = viser.ViserServer(port=args.port, verbose=False)
         self.scale = 1.
         self._add_names = []
+        self.num_grasps = 16
         
         self.text_handle = self.server.gui.add_text(
             "Scene File",
             "Scene"
         )
         self.text_handle.on_update(self._on_text_change)
+        
+        self.grasp_number_handle = self.server.gui.add_number(
+            "Grasp Number",
+            self.num_grasps
+        )
+        self.grasp_number_handle.on_update(self._on_grasp_number_change)
         
         self._pts = None
         self._label = None
@@ -51,7 +59,10 @@ class ViserVisualizer:
             return
 
         try:
-            data = np.load(os.path.join(x.target.value, 'object.npz'))
+            if x.target.value.endswith('npz'):
+                data = np.load(x.target.value)
+            else:
+                data = np.load(os.path.join(x.target.value, 'object.npz'))
             scene_pts = data['scene_pts']
             target_index = data['target_index']
         except KeyError as e:
@@ -81,13 +92,24 @@ class ViserVisualizer:
         # self.server.scene.add_point_cloud("scene_pcd", points=pts / self.scale, colors=colors, point_size=0.001)
         # self._add_names.append("scene_pcd")
         
-        self._pts = to_torch(pts).to(device).view(1, -1, 3)
-        self._label = to_torch(label).to(device).view(1, -1, 1)
+        self._pts = pts
+        self._label = label
 
-        grasp_stats = pkl.load(open(os.path.join(x.target.value, 'results.pkl'), 'rb'))
-        grasps = grasp_stats['grasps']
-        results = grasp_stats['results']
-        grasps = [p for p in grasps if p is not None]
+        if 'grasps' in data:
+            grasps = data["grasps"]
+            F_grasps = data["F_grasps"]
+            self.grasps = np.concatenate([grasps, F_grasps], axis = 0)
+            self.results = np.concatenate([np.ones((grasps.shape[0], )), 
+                                        np.zeros((F_grasps.shape[0], ))], axis=0)
+        else:
+            grasp_stats = pkl.load(open(os.path.join(x.target.value, 'results.pkl'), 'rb'))
+            grasps = grasp_stats['grasps']
+            self.results = np.array([p for p in grasp_stats['results'] if isinstance(p, int)])
+            self.grasps = np.stack([p for p in grasps if p is not None], axis = 0)
+            assert self.results.shape[0] == self.grasps.shape[0], "Mismatch between grasps and results length"  
+        
+        grasps = self.grasps[:self.num_grasps] if len(self.grasps) > self.num_grasps else self.grasps
+        results = self.results[:self.num_grasps] if len(self.results) > self.num_grasps else self.results
         self.visualize_grasp(grasps, results)
         
     def visualize_grasp(self, grasps, energy):
@@ -96,7 +118,6 @@ class ViserVisualizer:
             grasps: (num_grasps, 4, 4) array of grasps
             energy: (num_grasps,) array of energy values
         """
-        energy = (energy - np.min(energy)) / (np.max(energy) - np.min(energy) + 1e-6)
         cmap = plt.get_cmap('viridis')
         colors = cmap(energy)
         
@@ -109,47 +130,7 @@ class ViserVisualizer:
             gripper.visual.vertex_colors = np.tile(c, (len(gripper.vertices), 1))
             self._add_element(f"/grasp/gripper_{i}", self.server.scene.add_mesh_trimesh, gripper)
             # self.server.scene.add_mesh_trimesh(f"gripper_{i}", gripper)
-            
-    def _on_model_spec_change(self, x):
-        print(f"Model Spec: {x.target.value}")
-        # clean grasps
-        for i in range(self.num_grasps):
-            self._remove_name_if_exists(f"/grasp/gripper_{i}")
-            
-        model_args = load_experiment_specifications(x.target.value)
-        model_args['device'] = device
-        self.model = load_model(model_args)
-        self.model.to(device)
-        self.sampler = Grasp_AnnealedLD(self.model, batch=self.num_grasps, T=30, T_fit=50, device=device)
-        self.model_weight_handle.value = "/path/to/ckpt"
-        print(" Model Constructed ! ")  
-    
-    def _on_model_weight_change(self, x):
-        try:
-            if not os.path.exists(x.target.value):
-                print(f"File {x.target.value} does not exist")
-                return
-            
-            model_states = torch.load(x.target.value, map_location=device)
-        except (FileNotFoundError, IsADirectoryError) as e:
-            print(f"File {x.target.value} not found")
-            return
-            
-        # clean grasps
-        for i in range(self.num_grasps):
-            self._remove_name_if_exists(f"/grasp/gripper_{i}")
-            
-        print(f"Model Weight: {x.target.value}")
-        self.model.load_state_dict(model_states["model_state"])
-        
-        if self._pts is not None and self._label is not None:
-            self.model.set_latent(self._pts, self._label)
-            grasps, energy = self.sampler.sample()
-            grasps = to_numpy(grasps)  
-            # negate energy so that low energy -> bright color
-            energy = -1 * to_numpy(energy).reshape(-1)
-            self.visualize_grasp(grasps, energy)
-        
+
     @staticmethod 
     def fps_sample(points, num_pts):
         pcd = o3d.geometry.PointCloud()
@@ -178,15 +159,11 @@ class ViserVisualizer:
             self._remove_name_if_exists(f"/grasp/gripper_{i}")
             
         self.num_grasps = x.target.value
-        self.sampler = Grasp_AnnealedLD(self.model, batch=self.num_grasps, T=30, T_fit=50, device=device)
-
+        
         if self._pts is not None and self._label is not None:
-            self.model.set_latent(self._pts, self._label)
-            grasps, energy = self.sampler.sample()
-            grasps = to_numpy(grasps)  
-            # negate energy so that low energy -> bright color
-            energy = -1 * to_numpy(energy).reshape(-1)
-            self.visualize_grasp(grasps, energy)
+            grasps = self.grasps[:self.num_grasps] if len(self.grasps) > self.num_grasps else self.grasps
+            results = self.results[:self.num_grasps] if len(self.results) > self.num_grasps else self.results
+            self.visualize_grasp(grasps, results)
 
 def main(args):
     server = ViserVisualizer(args) 
