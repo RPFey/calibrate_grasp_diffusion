@@ -53,6 +53,8 @@ def parse_args():
     p.add_argument('--eval_ckpt', type=str, default=None, help='checkpoint to evaluate, \
                     if None, evaluate all the checkpoints in the model directory')
 
+    p.add_argument('--bullet', action='store_true', default=False, help='use bullet simulator')
+
     p.add_argument('--device',  type=str, default='cuda')
     
     p.add_argument('--class_type', type=str, default='Mug')
@@ -127,7 +129,7 @@ def main(opt):
                     steps_til_summary=args['TrainSpecs']['steps_til_summary'],
                     epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
                     loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
-                    clip_grad=False, val_loss_fn=val_loss_fn, overwrite=True,
+                    clip_grad=False, val_loss_fn=val_loss_fn, run_bullet=opt.bullet,
                     val_dataloader=test_dataloader)
     else:
         if opt.eval_ckpt is not None:            

@@ -113,7 +113,8 @@ class BulletEvaluator:
                     results = []
                     for grasp in grasp_poses:
                         execute_grasp = grasp.copy()
-                        execute_grasp[:3, 3] += 0.065 * execute_grasp[:3, 2]
+                        # inertial offset 
+                        execute_grasp[:3, 3] += 0.04 * execute_grasp[:3, 2]
                         execute_grasp = execute_grasp @ np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
                         sim.restore_state()
                         outcome, width = evaluate_grasp_pose(sim, execute_grasp)
@@ -124,11 +125,11 @@ class BulletEvaluator:
                             results.append(0)
                     
                     results = np.array(results)
+                    total_trial += len(results)
+                    success_trial += np.sum(results).item()
                     
                     # one success is enough
                     if np.any(results > 0):
-                        success_trial += 1
-                        
                         # only save successful grasps
                         success_grasps = grasp_poses[results > 0]
                         failure_grasps = grasp_poses[results == 0]
@@ -141,25 +142,28 @@ class BulletEvaluator:
                             F_grasps = failure_grasps,
                         )
                 
-                total_trial += 1
-                
             success_trials.append(success_trial)
             total_trials.append(total_trial)
         
-        return success_trials, total_trials
+        return total_trials, success_trials 
                 
-    def get_dataset(self, timestep, num_objects):
+    def get_dataset(self, timestep, num_objects, dataset_args={}):
         if len(timestep) == 0:
             print("Accquire all time step results")
             timestep = os.listdir(self.save_dir)
+        elif isinstance(timestep[0], int):
+            timestep = ["{:06d}".format(t) for t in timestep]
+        elif isinstance(timestep, int):
+            timestep = ["{:06d}".format(timestep)]
+        elif isinstance(timestep, str):
+            timestep = [timestep]
         
         total_files = []
-        import pdb; pdb.set_trace()
         for n, t in zip(num_objects, timestep):
             files = glob.glob(os.path.join(self.save_dir, t, f'seed*-obj{n}-t*.npz'))
             total_files += files
         
-        dataset = PointcloudSceneAcronymAndSDFDataset(self.save_dir)
+        dataset = PointcloudSceneAcronymAndSDFDataset(self.save_dir, **dataset_args)
         dataset.files = total_files
         return dataset
     

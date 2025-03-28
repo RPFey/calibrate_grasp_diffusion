@@ -17,13 +17,12 @@ class SDFLoss():
     def __call__(self, model:models.GraspDiffusionFields, 
                         model_input, ground_truth, val=False):
         loss_dict = dict()
-        label = ground_truth[self.field].squeeze().reshape(-1)
-        
         # single sdf is place holder
-        if label.shape[1] == 1:
+        if ground_truth[self.field].shape[1] <= 1:
             print("SDF Loss: No SDF values to compute loss")
             return None, None
-
+        
+        label = ground_truth[self.field].squeeze().reshape(-1)
         ## Set input ##
         x_sdf = model_input['x_sdf'].detach().requires_grad_()
         
