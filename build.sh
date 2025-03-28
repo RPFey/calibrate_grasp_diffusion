@@ -16,3 +16,10 @@ python -m pip install -r requirements.txt
 git clone https://github.com/RPFey/acronym.git ~/acronym_tools
 cd ~/acronym_tools
 python -m pip install -e .
+
+# install franka env
+git clone https://github.com/RPFey/franka_pybullet_ros.git ~/franka_pybullet_ros
+cd ~/franka_pybullet_ros
+# install Franka Pybullet ROS
+python -m pip install pybullet
+python -m pip install -e .

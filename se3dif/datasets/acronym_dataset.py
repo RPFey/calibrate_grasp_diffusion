@@ -4,6 +4,7 @@ import time
 
 import numpy as np
 import trimesh
+import open3d as o3d
 
 from scipy.stats import special_ortho_group
 
@@ -507,21 +508,28 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
     
         # sample points to num_scene_pts and num_target_pts
         target_pts = scene_pts[target_index > 0, :]
-        if len(target_pts) > self.num_target_pts:
-            rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts)
-            target_pts = target_pts[rix, ...]
-        elif len(target_pts) < self.num_target_pts:
-            rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts-len(target_pts))
-            target_pts = np.concatenate([target_pts, target_pts[rix, ...]], axis=0)
+        surr_pts = scene_pts[target_index == 0, :]
         
+        if self.split == 'train':
+            if len(target_pts) > self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts)
+                target_pts = target_pts[rix, ...]
+            elif len(target_pts) < self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts-len(target_pts))
+                target_pts = np.concatenate([target_pts, target_pts[rix, ...]], axis=0)
+        else:
+            target_pts = PointcloudSceneAcronymAndSDFDataset.fps_sample(target_pts, self.num_target_pts)
+                
         if self.num_scene_pts > 0:
-            surr_pts = scene_pts[target_index == 0, :]
-            if len(surr_pts) > self.num_scene_pts:
-                rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts)
-                surr_pts = surr_pts[rix, ...]
-            elif len(surr_pts) < self.num_scene_pts:
-                rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts-len(surr_pts))
-                surr_pts = np.concatenate([surr_pts, surr_pts[rix, ...]], axis=0)
+            if self.split == 'train':
+                if len(surr_pts) > self.num_scene_pts:
+                    rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts)
+                    surr_pts = surr_pts[rix, ...]
+                elif len(surr_pts) < self.num_scene_pts:
+                    rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts-len(surr_pts))
+                    surr_pts = np.concatenate([surr_pts, surr_pts[rix, ...]], axis=0)
+            else:
+                surr_pts = PointcloudSceneAcronymAndSDFDataset.fps_sample(surr_pts, self.num_scene_pts)
             pcl = np.concatenate([surr_pts, target_pts], axis=0)
         else:
             pcl = target_pts
@@ -628,6 +636,16 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
 
         return res, {'sdf': torch.from_numpy(sdf).float()}
 
+    @staticmethod
+    def fps_sample(pts, num_sample):
+        if len(pts) <= num_sample:
+            return pts
+        else:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(pts)
+            pcd = pcd.farthest_point_down_sample(num_sample)
+            return np.asarray(pcd.points)
+    
     def __getitem__(self, index):
         'Generates one sample of data'
         return self._get_item(index)

@@ -24,7 +24,7 @@ class BulletEvaluator:
         self.num_grasps = num_grasps
         self.save_dir = save_dir
     
-    def evaluate_model(self, model, total_timestep, num_objects, seed=42):
+    def evaluate_model(self, model, total_timestep, num_objects, seed=42, viz=False):
         if isinstance(num_objects, int):
             num_objects = [num_objects]
         
@@ -41,7 +41,7 @@ class BulletEvaluator:
             total_trial = 0
             success_trial = 0
             
-            sim = ClutterRemovalSim("pile", gui=False, seed=seed)
+            sim = ClutterRemovalSim("pile", gui=viz, seed=seed)
             sim.reset(num_object)
             sim.save_state()
             
@@ -86,8 +86,10 @@ class BulletEvaluator:
                     )
                 
                 # normalize & scale
-                target_pcd = target_pcd.farthest_point_down_sample(512)
-                scene_pcd = scene_pcd.farthest_point_down_sample(512)
+                if np.asarray(target_pcd.points).shape[0] > 512:
+                    target_pcd = target_pcd.farthest_point_down_sample(512)
+                if np.asarray(scene_pcd.points).shape[0] > 512:
+                    scene_pcd = scene_pcd.farthest_point_down_sample(512)
                 target_mean = np.mean(np.asarray(target_pcd.points), axis=0)
                 
                 complete_pc = np.concatenate([np.asarray(target_pcd.points), np.asarray(scene_pcd.points)], axis=0)
@@ -176,8 +178,9 @@ if __name__ == '__main__':
     import argparse
     
     args = argparse.ArgumentParser()
-    args.add_argument("--spec_file", type=str, default="/root/data/specs.yaml")
+    args.add_argument("--spec_file", type=str, default="/root/spec")
     args.add_argument("--weight", type=str, default="/root/data/weights/ckpt.pth")
+    args.add_argument("--viz", action='store_true', default=False, help='visualize the grasps')
     opt = args.parse_args()
 
     save_dir = "/mnt/kostas-graid/datasets/boshu/grasp_buffer"
@@ -195,7 +198,7 @@ if __name__ == '__main__':
         model.load_state_dict(model_states)
     
     for s in range(1):
-        evaluator.evaluate_model(model, 1000, 2, s)
+        evaluator.evaluate_model(model, 1000, 2, s, opt.viz)
         
     dataset = evaluator.get_dataset([], [2])
     dataset[0]

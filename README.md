@@ -48,6 +48,42 @@ PYOPENGL_PLATFORM=egl python train/train_scene_pointcloud_6d_grasp_diffusion.py 
 PYOPENGL_PLATFORM=egl python train/train_scene_pointcloud_6d_grasp_diffusion.py --spec_file multiobject_partialp_graspdif --saving_root ../logs/ --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048
 ```
 
+## Evaluation 
+
+Model Evaluation
+
+```bash
+# evaluate all checkpoints under saving_root/spec_file 
+python3.11  scripts/train/train_scene_pointcloud_6d_grasp_diffusion.py --saving_root logs/partial_prev_375b35/  --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048/  --eval --spec_file multiobject_scene_graspdif_bernoulli_ap
+
+# evaluate single checkpoint
+python3.11  scripts/train/train_scene_pointcloud_6d_grasp_diffusion.py --saving_root logs/partial_prev_375b35/  --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048/  --eval --eval_ckpt /path/to/ckpt --spec_file multiobject_scene_graspdif_bernoulli_ap
+```
+
+Visualize Grasp (Viser)
+
+```bash
+python scripts/sample/generate_scene_6d_grasp_poses.py
+```
+
+You should fill in the Model Specification File, Model Weights and Scene npz file path in the viser interface.
+
+Eg.
+
+Model Specification File - `/home/leiboshu/calibrate_grasp_diffusion/scripts/train/params/multiobject_scene_graspdif_bernoulli_ap`
+
+Model Weights - `/home/leiboshu/calibrate_grasp_diffusion/logs/complete_prev_375b35/multiobject_scene_graspdif_bernoulli_ap/checkpoints/model_current.pth`
+
+Scene - `/home/leiboshu/calibrate_grasp_diffusion/data/partial_scene_2048/Cup/Cup_1e227771ef66abdb4212ff51b27f0221_0.003260039651443572_r0.npz`
+
+Bullet Evaluation; Please install franka env following build.sh
+
+Run the bullet simulator to test grasps
+
+```bash
+# add --viz if you have display
+python /home/leiboshu/calibrate_grasp_diffusion/se3dif/samplers/bullet_sampler.py --spec_file /home/leiboshu/calibrate_grasp_diffusion/scripts/train/params/multiobject_scene_graspdif_bernoulli_ap --weight /home/leiboshu/calibrate_grasp_diffusion/logs/complete_prev_375b35/multiobject_scene_graspdif_bernoulli_ap/checkpoints/model_current.pth
+```
 
 ## Exp Logs
 
