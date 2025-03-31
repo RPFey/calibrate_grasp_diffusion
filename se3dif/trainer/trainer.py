@@ -7,8 +7,9 @@ from torch.utils.data import DataLoader, Dataset
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
-from se3dif.utils import makedirs, dict_to_device, ClusterStateManager
+from se3dif.utils import makedirs, dict_to_device, ClusterStateManager, SO3_R3
 from se3dif.samplers.bullet_sampler import BulletEvaluator
+from se3dif.samplers import Grasp_AnnealedLD
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import BinaryAveragePrecision, BinaryPrecisionRecallCurve
 from tqdm.autonotebook import tqdm
@@ -139,6 +140,237 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     # if 'ap' in losses: 
                     #     aps.append(1 - losses["ap"]) # only for ap loss
 
+                    train_losses.append(train_loss.item())
+                    if rank == 0:
+                        writer.add_scalar("total_train_loss", train_loss, total_steps)
+
+                    backward_start_time = time.time()
+                    for optim in optimizers:
+                        optim.zero_grad()
+                    train_loss.backward()
+                    if rank == 0:
+                        backward_time = time.time() - backward_start_time
+                        logging.info("Backward time: %0.6f" % (backward_time))
+
+                    if clip_grad:
+                        if isinstance(clip_grad, bool):
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
+                        else:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
+
+                    for optim in optimizers:
+                        optim.step()
+
+                    if rank == 0:
+                        pbar.update(1)
+                        pbar.set_postfix(suffix=f"Ep {epoch}, f-t {forward_time:.4f}, b-t {backward_time:.4f}")
+
+                    total_steps += 1
+                    if max_steps is not None and total_steps==max_steps:
+                        break
+
+            # dynamic adjust number of positive samples
+            # if len(aps) > 0:
+            #     average_ap = np.array(aps).mean()
+            #     last_pos_num = train_dataloader.dataset.num_pos
+            #     if average_ap > 0.75:
+            #         logging.info("Decrease the number of positive samples")
+            #         train_dataloader.dataset.num_pos = train_dataloader.dataset.num_pos // 2
+            #         train_dataloader.dataset.num_pos = max(4, train_dataloader.dataset.num_pos)
+            #     elif average_ap < 0.25:
+            #         logging.info("Increase the number of positive samples")
+            #         train_dataloader.dataset.num_pos = train_dataloader.dataset.num_pos * 2
+            #         train_dataloader.dataset.num_pos = min(128, train_dataloader.dataset.num_pos)
+            #     train_dataloader.dataset.num_neg = train_dataloader.dataset.num_neg + (last_pos_num - train_dataloader.dataset.num_pos)
+            
+            if (not epoch % (epochs_til_checkpoint // 2) ) and rank == 0:
+                print("Step Summary ... ")
+                if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
+                    os.remove(os.path.join(checkpoints_dir, 'model_current.pth'))
+                
+                state_dict = {
+                    "model_state": model.state_dict(),
+                    "optimizers": [optim.state_dict() for optim in optimizers],
+                    "steps": total_steps
+                }
+                torch.save(state_dict, os.path.join(checkpoints_dir, 'model_current.pth'))
+                
+                # this function is weird ... 
+                # TODO Uncomment these lines for visualization. 
+                # It does not work on a40 card and will cause memory issue.
+                # if summary_fn is not None:
+                #     summary_fn(model, model_input, gt, iter_info, writer, total_steps)
+            
+            if (not epoch % epochs_til_checkpoint) and rank == 0:
+
+                print("Save Checkpoint ... ")
+                state_dict = {
+                    "model_state": model.state_dict(),
+                    "optimizers": [optim.state_dict() for optim in optimizers],
+                    "steps": total_steps
+                }
+                torch.save(state_dict, os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+                
+                # evaltion 
+                if val_dataloader is not None:
+                    eval(model, val_dataloader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn,
+                         device=device, writer=writer, epoch=epoch, total_steps=total_steps)
+
+                    # run bullet_evaluator
+                    if run_bullet:
+                        tmp_dir = os.path.join(model_dir, 'tmp')
+                        os.makedirs(tmp_dir, exist_ok=True)
+                        evaluator = BulletEvaluator(tmp_dir)
+                        
+                        try:
+                            for n in range(2, 8):
+                                random_seeds = np.random.choice(int(1e4), (32, ), replace=False)
+                                # random sample 20 seeds from 
+                                totals = 0
+                                successes = 0
+                                
+                                for s in random_seeds:
+                                    total, success = evaluator.evaluate_model(model, total_steps, n, s)
+                                    totals += sum(total )
+                                    successes += sum(success)
+                                    
+                                success_ratio = successes / totals
+                                writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
+
+                                if successes <= 0:
+                                    raise StopIteration(f"Bullet evaluation failed at {n}")
+                        
+                        except StopIteration as e:
+                            print(e)
+                            
+                        complementary_dataset = evaluator.get_dataset([total_steps], list(range(2, 8)),
+                                                                    dataset_args = {"num_scene_pts": acronym_dataset.num_scene_pts, 
+                                                                                        "num_target_pts": acronym_dataset.num_target_pts} )
+                        complementary_dataloader = DataLoader(complementary_dataset, 
+                                                                batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
+                        full_loader = [complementary_dataloader, train_dataloader]
+
+            if max_steps is not None and total_steps==max_steps:
+                break
+        
+        state_dict = {
+            "model_state": model.state_dict(),
+            "optimizers": [optim.state_dict() for optim in optimizers],
+            "steps": total_steps
+        }   
+        torch.save(state_dict, os.path.join(checkpoints_dir, 'model_final.pth'))
+        # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_final.txt'), np.array(train_losses))
+        
+        writer.close()
+        return model, optimizers
+    
+    
+def train_ebm(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
+          summary_fn=None, iters_til_checkpoint=None, val_dataloader=None, clip_grad=False, val_loss_fn=None,
+          run_bullet=False, optimizers=None, batches_per_validation=10,  rank=0, max_steps=None, device='cpu'):
+
+    if optimizers is None:
+        optimizers = [torch.optim.Adam(lr=lr, params=model.parameters())]
+
+    if val_dataloader is not None:
+        assert val_loss_fn is not None, "If validation set is passed, have to pass a validation loss_fn!"
+
+    ## Build saving directories
+    makedirs(model_dir)
+    summaries_dir = os.path.join(model_dir, 'summaries')
+    checkpoints_dir = os.path.join(model_dir, 'checkpoints')
+    acronym_dataset = train_dataloader.dataset
+    
+    if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
+        # load from the previous checkpoint
+        states = torch.load(os.path.join(checkpoints_dir, 'model_current.pth'), map_location=device)
+        model.load_state_dict(states['model_state'], strict=True)
+        for optim, state in zip(optimizers, states['optimizers']):
+            optim.load_state_dict(state)
+        if rank == 0:
+            logging.info("Loaded model from the previous checkpoint")
+        total_steps = states['steps']   
+        start_epochs = total_steps // len(train_dataloader)
+    else:
+        total_steps = 0
+        start_epochs = 0
+
+    if rank == 0:
+        makedirs(summaries_dir)
+        makedirs(checkpoints_dir)
+
+        exp_name = datetime.datetime.now().strftime("%m.%d.%Y %H:%M:%S")
+        writer = SummaryWriter(summaries_dir + '/' + exp_name)
+        logging.basicConfig(filename=os.path.join(summaries_dir, exp_name, 'training.log'), level=logging.INFO)
+
+    sample_steps = 10
+    sampler = Grasp_AnnealedLD(model, batch=1, T=0, T_fit=sample_steps, k_steps=1, enable_time = False, device=device)
+    with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
+        train_losses = []
+        for epoch in range(start_epochs, epochs):
+
+            # aps = []
+            model.train()
+            for step, (model_input, gt) in enumerate(train_dataloader):
+                model_input = dict_to_device(model_input, device)
+                gt = dict_to_device(gt, device)
+                
+                if cm.should_exit():
+                    writer.close()
+                    cm.requeue()
+                
+                sampling_iterations = 5
+                pose_batch = model_input["x_ene_pos"].shape[0] * model_input["x_ene_pos"].shape[1]
+                init_samples = None
+                for k in range(sampling_iterations):
+                
+                    # update samples
+                    forward_start_time = time.time()
+                    # disable grad
+                    model.eval()
+                    for params in model.parameters():  
+                        params.requires_grad = False
+                    
+                    # set the visual context for the model
+                    c = model_input['visual_context']
+                    target_index = model_input.get('target_index', None)    
+                    model.set_latent(c, target_index=target_index)
+                    
+                    if init_samples is not None:
+                        num_poes = init_samples.shape[0]  
+                        resample = int(num_poes * 0.1)
+                        reinit = SO3_R3().sample(resample).to(device)
+                        reinit_index = np.random.choice(num_poes, resample, replace=False)
+                        init_samples[reinit_index] = reinit
+                    
+                    updated_samples, scores = sampler.sample(H0=init_samples, batch=pose_batch)
+                    model_input["generated_grasps"] = updated_samples.detach()
+                    init_samples = model_input["generated_grasps"]
+                    
+                    # enable grad
+                    for params in model.parameters():
+                        params.requires_grad = True
+                    model.train()
+                    logging.info("Sampling time: %0.6f" % (time.time() - forward_start_time))
+                    
+                    forward_start_time = time.time()
+                    losses, iter_info = loss_fn(model, model_input, gt)
+                    
+                    if rank == 0:
+                        forward_time  = time.time() - forward_start_time
+                        logging.info("Forward time: %0.6f" % (forward_time))
+                        if 'ap' in iter_info:
+                            writer.add_scalar("train_ap", iter_info["ap"], total_steps)
+                        if 'noise_ap' in iter_info:
+                            writer.add_scalar("train_noise_ap", iter_info["noise_ap"], total_steps)
+
+                    train_loss = 0.
+                    for loss_name, loss in losses.items():
+                        single_loss = loss.mean()
+                        if rank == 0:
+                            writer.add_scalar(loss_name, single_loss, total_steps)
+                        train_loss += single_loss
+                        
                     train_losses.append(train_loss.item())
                     if rank == 0:
                         writer.add_scalar("total_train_loss", train_loss, total_steps)

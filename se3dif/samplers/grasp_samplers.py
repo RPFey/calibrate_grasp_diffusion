@@ -106,13 +106,14 @@ class ApproximatedGrasp_AnnealedLD():
 
 class Grasp_AnnealedLD():
     def __init__(self, model, device='cpu', batch=10, dim =3, k_steps=1,
-                 T=200, T_fit=5, deterministic=False):
+                 T=200, T_fit=5, deterministic=False, enable_time=True):
 
         self.model = model
         self.device = device
         self.dim = dim
         self.shape = [4,4]
         self.batch = batch
+        self.enable_time = enable_time
 
         ## Langevin Dynamics evolution ##
         self.T = T
@@ -124,20 +125,21 @@ class Grasp_AnnealedLD():
         return np.sqrt((sigma ** (2 * t) - 1.) / (2. * np.log(sigma)))
 
     def _step(self, H0, t, noise_off=True):
-
-        ## Phase
-        noise_std = .5
-        eps = 1e-3
-        phase = ((self.T - t) / (self.T)) + eps
-        sigma_T = self._marginal_prob_std(eps)
-
-        ## Annealed Langevin Dynamics ##
-        alpha = 1e-3
-        sigma_i = self._marginal_prob_std(phase)
-        ratio = sigma_i ** 2 / sigma_T ** 2
-        c_lr = alpha * ratio
+        # compute the update step size
         if noise_off:
             c_lr = 0.003
+        else:
+            ## Phase
+            noise_std = .5
+            eps = 1e-3
+            phase = ((self.T - t) / (self.T)) + eps
+            sigma_T = self._marginal_prob_std(eps)
+
+            ## Annealed Langevin Dynamics ##
+            alpha = 1e-3
+            sigma_i = self._marginal_prob_std(phase)
+            ratio = sigma_i ** 2 / sigma_T ** 2
+            c_lr = alpha * ratio
 
         H1 = H0
         for k in range(self.k_steps):
@@ -150,7 +152,7 @@ class Grasp_AnnealedLD():
                 ## 2. Compute energy gradient ##
                 phi0_in = phi0.detach().requires_grad_(True)
                 H_in = SO3_R3().exp_map(phi0_in).to_matrix()
-                t_in = phase * torch.ones_like(H_in[:,0,0])
+                t_in = phase * torch.ones_like(H_in[:,0,0]) if self.enable_time else None
                 e = self.model(H_in, t_in)
                 d_phi = torch.autograd.grad(e.sum(), phi0_in)[0]
 
@@ -172,12 +174,13 @@ class Grasp_AnnealedLD():
 
         return H1
 
-    def sample(self, save_path=False, batch=None):
-
+    def sample(self, save_path=False, batch=None, H0=None):
         ## 1.Sample initial SE(3) ##
         if batch is None:
             batch = self.batch
-        H0 = SO3_R3().sample(batch).to(self.device, torch.float32)
+            
+        if H0 is None:
+            H0 = SO3_R3().sample(batch).to(self.device, torch.float32)
 
         ## 2.Langevin Dynamics (We evolve the data as [R3, SO(3)] pose)##
         Ht = H0
@@ -197,9 +200,9 @@ class Grasp_AnnealedLD():
         # compute final score 
         with torch.no_grad():
             eps = 1e-3
-            phase = (1 / self.T) + eps
-            t_in = phase * torch.ones_like(Ht[:, 0, 0])
-            energy = self.model(Ht, t_in)
+            t_in = ((1 / self.T) + eps) * torch.ones_like(Ht[:, 0, 0]) \
+                        if self.enable_time else None
+            energy = self.model(Ht, t_in) 
             
         if save_path:
             return Ht, energy, trj_H

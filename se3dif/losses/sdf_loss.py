@@ -248,3 +248,23 @@ class DirichletAPLoss():
         
         info = {'ap': 1 - ap_loss.item()} 
         return loss_dict, info
+    
+class EBMLoss():
+    def __init__(self, field='ebm'):
+        self.field = field
+        
+    def __call__(self, model:models.GraspDiffusionFields, 
+                    model_input, ground_truth, val=False):
+        loss_dict = dict()
+        label = model_input["x_ene_pos"].reshape(-1, 4, 4)
+        n_label = model_input["generated_grasps"].reshape(-1, 4, 4) # 
+        pos_energy = model(label)
+        neg_energy = model(n_label)
+
+        info = {} 
+        loss = torch.mean(pos_energy) - torch.mean(neg_energy)
+        loss_dict[self.field] = loss
+        info['pos_energy'] = pos_energy.mean().item()
+        info['neg_energy'] = neg_energy.mean().item()   
+        
+        return loss_dict, info
