@@ -40,8 +40,6 @@ class BulletEvaluator:
         success_trials = []
         
         for num_object in num_objects:
-            total_trial = 0
-            success_trial = 0
             
             sim = ClutterRemovalSim("pile", gui=viz, seed=seed)
             sim.reset(num_object)
@@ -65,10 +63,14 @@ class BulletEvaluator:
             # find all visible indices
             all_segs = np.stack(segs, axis=0)
             unique_ids = np.unique(all_segs)
+            print("Unique IDs: ", unique_ids)
             
             for target in unique_ids:
+                total_trial = 0
+                success_trial = 0
+                
                 # skip desk and box
-                if target in [0, 1]:
+                if target < 2:
                     continue
                 
                 # scene point cloud
@@ -147,8 +149,8 @@ class BulletEvaluator:
                                 F_grasps = failure_grasps,
                             )
                 
-            success_trials.append(success_trial)
-            total_trials.append(total_trial)
+                success_trials.append(success_trial)
+                total_trials.append(total_trial)
         
         return total_trials, success_trials 
                 
@@ -191,7 +193,7 @@ if __name__ == '__main__':
     opt = args.parse_args()
 
     save_dir = opt.save_dir
-    evaluator = BulletEvaluator(save_dir, save_data=opt.save_data)
+    evaluator = BulletEvaluator(save_dir, num_grasps=128, save_data=opt.save_data)
     
     assert opt.num_objects > 1, "Number of objects must be greater than 1"
     
@@ -206,17 +208,26 @@ if __name__ == '__main__':
     else:
         model.load_state_dict(model_states)
     
-    for n in range(opt.num_objects):
-        total_exps = 0
-        success_exps = 0
+    total_exps = []
+    success_exps = []
+    
+    for n in range(2, opt.num_objects + 1):
+        total_exp = 0
+        success_exp = 0
         for s in range(opt.num_seeds):
             total_trials, success_trials = evaluator.evaluate_model(model, 1000, n, s, opt.viz)
-            total_exps += len(total_trials)
-            success_exps += np.sum(np.array(success_trials) > 0)
+            total_exp += len(total_trials)
+            success_exp += np.sum(np.array(success_trials) > 0).item()
         
-        print(f"Bullet Evaluation Results for Num. Objects {opt.num_objects} ")
-        print("Total Trials: ", total_exps)
-        print("Total Success: ", success_exps)
+        print(" For No. Objs = ", n)
+        print("Total Trials: ", total_exp)
+        print("Total Success: ", success_exp)
+        total_exps.append(total_exp)
+        success_exps.append(success_exp)
+        
+    print(f"Bullet Evaluation Results for Num. Objects {list(range(2, opt.num_objects + 1))} ")
+    print("Total Trials: ", total_exps)
+    print("Total Success: ", success_exps)
     
     # get dataset 
     # dataset = evaluator.get_dataset([], [2])
