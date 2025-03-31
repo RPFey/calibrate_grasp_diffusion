@@ -84,7 +84,7 @@ class GraspDiffusionFields(nn.Module):
             
         self.z = self.vision_encoder(O)
         
-    def forward(self, H, k):
+    def forward(self, H, k=None):
         """ Predict the energy (Negative Log Probality) of the current samples. """
         logits = self.get_logits(H, k)
         
@@ -107,7 +107,7 @@ class GraspDiffusionFields(nn.Module):
         z_ext = self.z.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, self.z.shape[-1])
         
         p = self.geometry_encoder(H, self.points)
-        k_ext = k.unsqueeze(1).repeat(1, p.shape[1])
+        k_ext = k.unsqueeze(1).repeat(1, p.shape[1]) if k is not None else None
         z_ext = z_ext.unsqueeze(1).repeat(1, p.shape[1], 1)
         
         ## 2. Get Features
