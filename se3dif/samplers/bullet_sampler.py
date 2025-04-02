@@ -24,8 +24,26 @@ class BulletEvaluator:
         self.num_grasps = num_grasps
         self.save_dir = save_dir
         self.save_data = save_data
+        
+        if save_data:
+            os.makedirs(save_dir, exist_ok=True)
     
     def evaluate_model(self, model, total_timestep, num_objects, seed=42, viz=False):
+        """ Evaluate the model on the given number of objects
+        
+        Args:
+            model: the model to evaluate (SE3Diffusion)
+            total_timestep: the current number of timesteps for SE3 Diff
+            num_objects: the number of objects to evaluate on
+                int or List[int]
+            seed: the random seed for the simulation
+            viz: whether to visualize the grasps
+        Returns:
+            total_trials: the total number of trials for each category
+                List[Int] total trials for each instance
+            success_trials: the number of successful trials for each category
+                List[Int] success successes for each instance
+        """
         if isinstance(num_objects, int):
             num_objects = [num_objects]
         
@@ -90,10 +108,32 @@ class BulletEvaluator:
                     )
                 
                 # normalize & scale
-                if np.asarray(target_pcd.points).shape[0] > 512:
-                    target_pcd = target_pcd.farthest_point_down_sample(512)
-                if np.asarray(scene_pcd.points).shape[0] > 512:
+                num_target_pts = np.asarray(target_pcd.points).shape[0]
+                desired_num_target_pts = 512 if model.num_scene_points > 0 else 1024
+                if num_target_pts > desired_num_target_pts:
+                    target_pcd = target_pcd.farthest_point_down_sample(desired_num_target_pts)
+                elif num_target_pts < 128:
+                    print("Too few points for target ... Continue ... ")
+                    continue
+                
+                # crop scene point cloud
+                extent_scale = 1.
+                target_extent = target_pcd.get_max_bound() - target_pcd.get_min_bound()
+                target_center = (np.asarray(target_pcd.points)).mean(axis=0)
+                croped_scene_num_pts = 0 
+                while croped_scene_num_pts < 256:
+                    extent_scale += 0.25
+                    crop_box = o3d.geometry.AxisAlignedBoundingBox(
+                        min_bound = target_center - extent_scale * target_extent,
+                        max_bound = target_center + extent_scale* target_extent
+                    )
+                    croped_scene_pcd = scene_pcd.crop(crop_box)
+                    croped_scene_num_pts = len(croped_scene_pcd.points)
+                
+                scene_pcd = croped_scene_pcd
+                if len(scene_pcd.points) > 512:
                     scene_pcd = scene_pcd.farthest_point_down_sample(512)
+                    
                 target_mean = np.mean(np.asarray(target_pcd.points), axis=0)
                 
                 complete_pc = np.concatenate([np.asarray(target_pcd.points), np.asarray(scene_pcd.points)], axis=0)
