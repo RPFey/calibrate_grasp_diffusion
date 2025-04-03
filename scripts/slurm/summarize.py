@@ -8,6 +8,7 @@
 
 import os
 import argparse
+import numpy as np
 import matplotlib.pyplot as plt
 from tensorboard.backend.event_processing import event_accumulator
 
@@ -25,7 +26,7 @@ def extract_metric_from_events(log_dir, metric_name):
                         metric_data.append((event.step, event.value))
     return metric_data
 
-def plot_metrics(src_dirs, metric_name):
+def plot_metrics(src_dirs, metric_name, smoothing=0):
     plt.figure(figsize=(10, 6))
     
     for log_dir in src_dirs:
@@ -34,6 +35,13 @@ def plot_metrics(src_dirs, metric_name):
         
         if metric_values:
             steps, values = zip(*sorted(metric_values))
+            
+            if smoothing > 1:
+                # do 1-d smoothing for valus
+                # 1-d convolution
+                kernel = np.ones(smoothing) / smoothing
+                values = np.convolve(values, kernel, mode='same')
+                
             plt.plot(steps, values, label=experiment_name)
         else:
             print(f"No data found for {metric_name} in {log_dir}")
@@ -49,6 +57,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot metrics from TensorBoard logs.")
     parser.add_argument("--metric_name", type=str, required=True, help="Name of the metric to plot")
     parser.add_argument("--src", type=str, nargs='+', required=True, help="Paths to TensorBoard log directories")
+    parser.add_argument("--smoothing", type=int, default=1, help="Smoothing factor for the plot")
     args = parser.parse_args()
     
-    plot_metrics(args.src, args.metric_name)
+    plot_metrics(args.src, args.metric_name, args.smoothing)

@@ -116,7 +116,7 @@ def main(opt):
                 steps_til_summary=args['TrainSpecs']['steps_til_summary'],
                 epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
                 loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
-                clip_grad=False, val_loss_fn=val_loss_fn, overwrite=True,
+                clip_grad=False, val_loss_fn=val_loss_fn,
                 val_dataloader=test_dataloader)
 
 

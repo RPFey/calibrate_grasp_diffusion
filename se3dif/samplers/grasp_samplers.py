@@ -126,9 +126,7 @@ class Grasp_AnnealedLD():
 
     def _step(self, H0, t, noise_off=True):
         # compute the update step size
-        if noise_off:
-            c_lr = 0.003
-        else:
+        if self.enable_time:
             ## Phase
             noise_std = .5
             eps = 1e-3
@@ -140,6 +138,9 @@ class Grasp_AnnealedLD():
             sigma_i = self._marginal_prob_std(phase)
             ratio = sigma_i ** 2 / sigma_T ** 2
             c_lr = alpha * ratio
+            
+        if noise_off:
+            c_lr = 0.003
 
         H1 = H0
         for k in range(self.k_steps):

@@ -6,6 +6,8 @@ import os, os.path as osp
 import open3d as o3d
 import glob
 from torch.utils.data import Dataset, DataLoader
+from multiprocessing import Process, Pipe, Queue
+import time
 
 import theseus as th
 from theseus import SO3
@@ -107,39 +109,12 @@ class BulletEvaluator:
                         depth_image, intrinsics, extrinsic = Transform.from_list(ext).as_matrix(), depth_scale=1.0, depth_trunc=2.0
                     )
                 
-                # normalize & scale
-                num_target_pts = np.asarray(target_pcd.points).shape[0]
-                desired_num_target_pts = 512 if model.num_scene_points > 0 else 1024
-                if num_target_pts > desired_num_target_pts:
-                    target_pcd = target_pcd.farthest_point_down_sample(desired_num_target_pts)
-                elif num_target_pts < 128:
-                    print("Too few points for target ... Continue ... ")
+                complete_pc, complete_pc_norm, \
+                    target_index, target_mean = \
+                        self.process_point_clouds(target_pcd, scene_pcd)
+                if complete_pc_norm is None:
                     continue
                 
-                # crop scene point cloud
-                extent_scale = 1.
-                target_extent = target_pcd.get_max_bound() - target_pcd.get_min_bound()
-                target_center = (np.asarray(target_pcd.points)).mean(axis=0)
-                croped_scene_num_pts = 0 
-                while croped_scene_num_pts < 256:
-                    extent_scale += 0.25
-                    crop_box = o3d.geometry.AxisAlignedBoundingBox(
-                        min_bound = target_center - extent_scale * target_extent,
-                        max_bound = target_center + extent_scale* target_extent
-                    )
-                    croped_scene_pcd = scene_pcd.crop(crop_box)
-                    croped_scene_num_pts = len(croped_scene_pcd.points)
-                
-                scene_pcd = croped_scene_pcd
-                if len(scene_pcd.points) > 512:
-                    scene_pcd = scene_pcd.farthest_point_down_sample(512)
-                    
-                target_mean = np.mean(np.asarray(target_pcd.points), axis=0)
-                
-                complete_pc = np.concatenate([np.asarray(target_pcd.points), np.asarray(scene_pcd.points)], axis=0)
-                target_index = np.concatenate([np.ones(len(target_pcd.points)), np.zeros(len(scene_pcd.points))], axis=0)
-                
-                complete_pc_norm = (complete_pc - target_mean) * 8
                 # sample poses
                 if model.num_scene_points > 0:
                     complete_pc_norm_t = torch.from_numpy(complete_pc_norm).to(device).view(1, -1, 3).float()   
@@ -163,7 +138,7 @@ class BulletEvaluator:
                         execute_grasp[:3, 3] += 0.04 * execute_grasp[:3, 2]
                         execute_grasp = execute_grasp @ np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
                         sim.restore_state()
-                        outcome, width = evaluate_grasp_pose(sim, execute_grasp)
+                        outcome, width = evaluate_grasp_pose(sim, execute_grasp, target_id=int(target))
                         if outcome == Label.SUCCESS:
                             print("Grasp success")
                             results.append(1)
@@ -193,6 +168,252 @@ class BulletEvaluator:
                 total_trials.append(total_trial)
         
         return total_trials, success_trials 
+                
+    def __evaluate_grasps(self, num_object, seed, child_conn, queue):
+        sim = ClutterRemovalSim("pile", gui=False, seed=seed)
+        sim.reset(num_object)
+        sim.save_state()
+        
+        n = 8 # np.random.randint(MAX_VIEWPOINT_COUNT) + 1
+        depth_imgs, extrinsics, segs = render_images(sim, n)
+        
+        # create point cloud using open3d
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(
+            width=depth_imgs[0].shape[1],
+            height=depth_imgs[0].shape[0],
+            fx=sim.camera.intrinsic.fx,
+            fy=sim.camera.intrinsic.fy,
+            cx=sim.camera.intrinsic.cx,
+            cy=sim.camera.intrinsic.cy
+        )
+        
+        # find all visible indices
+        all_segs = np.stack(segs, axis=0)
+        unique_ids = np.unique(all_segs)
+        print("Unique IDs: ", unique_ids)
+        
+        # hold ids >= 2 and all other ids are set to 0
+        unique_ids = np.where(unique_ids < 2, 0, unique_ids)
+        all_segs = np.where(all_segs < 2, 0, all_segs)
+        seg_pcds = {i: o3d.geometry.PointCloud() for i in unique_ids} 
+        
+        # back project 
+        for depth, ext, seg in zip(depth_imgs, extrinsics, segs):
+            for target in unique_ids:
+                depth_image = o3d.geometry.Image(depth * (seg == target))
+                seg_pcds[target] += o3d.geometry.PointCloud.create_from_depth_image(
+                    depth_image, intrinsics, extrinsic = Transform.from_list(ext).as_matrix(), depth_scale=1.0, depth_trunc=2.0
+                )  
+        
+        seg_pcds = {k: np.asarray(v.points) for k, v in seg_pcds.items()}  
+        queue.put(seg_pcds)
+        child_conn.send(("input", ))
+        
+        # wait for the parent process to finish
+        child_conn.poll(None)
+        
+        # receive all the grasps for each category
+        all_grasps = child_conn.recv()
+        
+        success_trials, total_trials = [], []
+        for unique_id, grasp_poses in all_grasps.items():    
+            # evaluate 
+            if len(grasp_poses) > 0:
+                results = []
+                for execute_grasp in grasp_poses:
+                    sim.restore_state()
+                    outcome, width = evaluate_grasp_pose(sim, execute_grasp, target_id=int(unique_id))
+                    if outcome == Label.SUCCESS:
+                        # print("Grasp success")
+                        results.append(1)
+                    else:
+                        results.append(0)
+                
+                results = np.array(results)
+                total_trials.append(len(results))
+                success_trials.append(np.sum(results).item())
+            
+        child_conn.send(("result", (total_trials, success_trials)))
+        return 
+    
+    def process_point_clouds(self, target_pcd, scene_pcd):
+        # normalize & scale
+        num_target_pts = np.asarray(target_pcd.points).shape[0]
+        desired_num_target_pts = 512 if model.num_scene_points > 0 else 1024
+        if num_target_pts > desired_num_target_pts:
+            target_pcd = target_pcd.farthest_point_down_sample(desired_num_target_pts)
+        elif num_target_pts < 128:
+            print("Too few points for target ... Continue ... ")
+            return None, None, None, None
+        
+        # crop scene point cloud
+        extent_scale = 1.
+        target_extent = target_pcd.get_max_bound() - target_pcd.get_min_bound()
+        target_center = (np.asarray(target_pcd.points)).mean(axis=0)
+        croped_scene_num_pts = 0 
+        while croped_scene_num_pts < 256:
+            extent_scale += 0.25
+            crop_box = o3d.geometry.AxisAlignedBoundingBox(
+                min_bound = target_center - extent_scale * target_extent,
+                max_bound = target_center + extent_scale* target_extent
+            )
+            croped_scene_pcd = scene_pcd.crop(crop_box)
+            croped_scene_num_pts = len(croped_scene_pcd.points)
+        
+        scene_pcd = croped_scene_pcd
+        if len(scene_pcd.points) > 512:
+            scene_pcd = scene_pcd.farthest_point_down_sample(512)
+            
+        target_mean = np.mean(np.asarray(target_pcd.points), axis=0)
+        
+        complete_pc = np.concatenate([np.asarray(target_pcd.points), np.asarray(scene_pcd.points)], axis=0)
+        target_index = np.concatenate([np.ones(len(target_pcd.points)), np.zeros(len(scene_pcd.points))], axis=0)
+        complete_pc_norm = (complete_pc - target_mean) * 8
+        
+        return complete_pc, complete_pc_norm, target_index, target_mean
+    
+    def _run_model(self, model, pts):
+        sampler = Grasp_AnnealedLD(model, batch=self.num_grasps,
+                                    T=70, T_fit=50, k_steps=1, 
+                                    device=device)
+        
+        all_pts = []
+        seg_ids = []
+        for i, pcd in pts.items():
+            all_pts.append(pcd)
+            seg_ids.append(np.ones(len(pcd)) * i)
+            
+        all_pts = np.concatenate(all_pts, axis=0)
+        seg_ids = np.concatenate(seg_ids, axis=0)
+        unique_ids = np.unique(seg_ids)
+        grasps_ids = {}
+        
+        for i in unique_ids:
+            if i < 2:
+                continue
+            
+            target_pts = all_pts[seg_ids == i]
+            scene_pts = all_pts[seg_ids != i]
+            
+            target_pcd = o3d.geometry.PointCloud(); target_pcd.points = o3d.utility.Vector3dVector(target_pts)
+            scene_pcd = o3d.geometry.PointCloud(); scene_pcd.points = o3d.utility.Vector3dVector(scene_pts)
+            complete_pc, complete_pc_norm, \
+                    target_index, target_mean = \
+                        self.process_point_clouds(target_pcd, scene_pcd)
+            if complete_pc_norm is None:
+                continue 
+                
+            # sample poses
+            if model.num_scene_points > 0:
+                complete_pc_norm_t = torch.from_numpy(complete_pc_norm).to(device).view(1, -1, 3).float()   
+                target_index_t = torch.from_numpy(target_index).to(device).view(1, -1, 1).float()
+                model.set_latent(complete_pc_norm_t, target_index_t)
+            else:
+                target_pc = complete_pc_norm[target_index == 1]
+                target_pc = torch.from_numpy(target_pc).to(device).view(1, -1, 3).float()
+                model.set_latent(target_pc)    
+            
+            grasp_poses, scores = sampler.sample()
+            grasp_poses = grasp_poses.cpu().numpy()
+            grasp_poses[:, :3, 3] = (grasp_poses[:, :3, 3] / 8) + target_mean
+            
+            # do some adjustment for bullet
+            orientation = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+            grasp_poses[:, :3, 3] += 0.04 * grasp_poses[:, :3, 2]
+            grasp_poses = grasp_poses @ orientation[None, :, :]
+            grasps_ids[i] = grasp_poses
+            
+            # for grasp in grasp_poses:
+            #     execute_grasp = grasp.copy()
+            #     # inertial offset 
+            #     execute_grasp[:3, 3] += 0.04 * execute_grasp[:3, 2]
+            #     execute_grasp = execute_grasp @ np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                        
+        return grasps_ids
+    
+    def run_multiple_process(self, model, num_objects, seeds, num_processes=4):
+        """ Run the evaluation in multiple processes """
+        
+        # get grid of num_objects and seeds
+        object_seed_pairs = [(n, s) for n in num_objects for s in seeds]
+        num_pairs = len(object_seed_pairs)
+        
+        # create pipes for communication
+        process_pool, parent_conns, queues = {}, {}, {}
+        results = {}
+        
+        def __wait_process():
+            finish_ids = []
+                
+            # check all the connections
+            for i, conn in parent_conns.items():
+                if conn.poll(0.1):
+                    # receive the point clouds from the child process
+                    data = conn.recv()
+                    
+                    if data[0] == 'input':
+                        # run something
+                        pts = queues[i].get()
+                        grasps_ids = self._run_model(model, pts)
+                        
+                        # send the point clouds to the child process
+                        conn.send(grasps_ids)
+                    else:
+                        results[i] = data[1]
+                        process_pool[i].join()
+                        finish_ids.append(i)
+            
+            for i in finish_ids:
+                # remove the connection
+                # close the connection and remove the process
+                parent_conns[i].close()
+                del parent_conns[i]
+                del process_pool[i]
+                del queues[i]
+                    
+            time.sleep(0.1)
+        
+        idx = 0 
+        while idx < num_pairs:
+            pair = object_seed_pairs[idx]
+            # get the pairs for this process
+            n, s = pair
+
+            if len(process_pool) < num_processes:
+                print(f"Process {pair}")
+                parent_conn, child_conn = Pipe()
+                q = Queue()
+                
+                # create a new process
+                p = Process(target=self.__evaluate_grasps, args=(n, s, child_conn, q))
+                p.start()
+                process_pool[idx] = p
+                parent_conns[idx] = parent_conn
+                queues[idx] = q
+                idx += 1
+                
+            else:
+                __wait_process()
+        
+        while len(process_pool) > 0:
+            __wait_process()
+        
+        
+        stats = {}
+        for exp_id, pair in enumerate(object_seed_pairs):
+            n, s = pair
+            if exp_id in results:
+                total_trials, success_trials = results[exp_id]
+                
+                if n not in stats:
+                    stats[n] = [0, 0]
+                    
+                stats[n][0] += len(total_trials)
+                stats[n][1] += np.sum(np.array(success_trials) > 0).item()
+        
+        for k, v in stats.items():
+            print(f"No. objs {k}, total trial {v[0]}, success {v[1]}")
+        
                 
     def get_dataset(self, timestep, num_objects, dataset_args={}):
         if len(timestep) == 0:
@@ -230,10 +451,11 @@ if __name__ == '__main__':
     args.add_argument("--viz", action='store_true', default=False, help='visualize the grasps')
     args.add_argument("--num_objects", type=int, default=2, help='number of objects to evaluate on')
     args.add_argument("--num_seeds", type=int, default=2, help='number of seeds to test on')
+    args.add_argument("--num_processes", type=int, default=1, help='number of seeds to test on')
     opt = args.parse_args()
 
     save_dir = opt.save_dir
-    evaluator = BulletEvaluator(save_dir, num_grasps=128, save_data=opt.save_data)
+    evaluator = BulletEvaluator(save_dir, num_grasps=512, save_data=opt.save_data)
     
     assert opt.num_objects > 1, "Number of objects must be greater than 1"
     
@@ -251,24 +473,11 @@ if __name__ == '__main__':
     total_exps = []
     success_exps = []
     
-    for n in range(2, opt.num_objects + 1):
-        total_exp = 0
-        success_exp = 0
-        for s in range(opt.num_seeds):
-            total_trials, success_trials = evaluator.evaluate_model(model, 1000, n, s, opt.viz)
-            total_exp += len(total_trials)
-            success_exp += np.sum(np.array(success_trials) > 0).item()
-        
-        print(" For No. Objs = ", n)
-        print("Total Trials: ", total_exp)
-        print("Total Success: ", success_exp)
-        total_exps.append(total_exp)
-        success_exps.append(success_exp)
-        
-    print(f"Bullet Evaluation Results for Num. Objects {list(range(2, opt.num_objects + 1))} ")
-    print("Total Trials: ", total_exps)
-    print("Total Success: ", success_exps)
-    
-    # get dataset 
-    # dataset = evaluator.get_dataset([], [2])
-    # dataset[0]
+    if opt.num_processes > 1:
+        evaluator.run_multiple_process(model, 
+                                    list(range(2, opt.num_objects + 1)), 
+                                    list(range(opt.num_seeds)), num_processes=opt.num_processes)
+    else:
+        evaluator.evaluate_model(
+            model, 1000, opt.num_objects, opt.num_seeds, opt.viz
+        )
