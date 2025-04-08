@@ -53,7 +53,8 @@ class BulletEvaluator:
                                         T=70, T_fit=50, k_steps=1, 
                                         device=device)
         save_dir = os.path.join(self.save_dir, "{:06d}".format(total_timestep))
-        os.makedirs(save_dir, exist_ok=True)
+        if self.save_data:
+            os.makedirs(save_dir, exist_ok=True)
         
         # record for each category given the current number of objects
         total_trials = []
@@ -111,7 +112,7 @@ class BulletEvaluator:
                 
                 complete_pc, complete_pc_norm, \
                     target_index, target_mean = \
-                        self.process_point_clouds(target_pcd, scene_pcd)
+                        BulletEvaluator.process_point_clouds(target_pcd, scene_pcd, model.num_scene_points)
                 if complete_pc_norm is None:
                     continue
                 
@@ -169,7 +170,7 @@ class BulletEvaluator:
         
         return total_trials, success_trials 
                 
-    def __evaluate_grasps(self, num_object, seed, child_conn, queue):
+    def __evaluate_grasps(self, num_object, seed, child_conn, queue, save_dir):
         sim = ClutterRemovalSim("pile", gui=False, seed=seed)
         sim.reset(num_object)
         sim.save_state()
@@ -215,7 +216,7 @@ class BulletEvaluator:
         # receive all the grasps for each category
         all_grasps = child_conn.recv()
         
-        success_trials, total_trials = [], []
+        cate_results = {}
         for unique_id, grasp_poses in all_grasps.items():    
             # evaluate 
             if len(grasp_poses) > 0:
@@ -229,17 +230,52 @@ class BulletEvaluator:
                     else:
                         results.append(0)
                 
-                results = np.array(results)
-                total_trials.append(len(results))
-                success_trials.append(np.sum(results).item())
+                results = np.array(results, dtype=np.uint8)
+                cate_results[unique_id] = results
+                
+                # save results
+                if save_dir is not None and np.any(results > 0):
+                    grasp_poses[:, :3, 3] -= 0.04 * grasp_poses[:, :3, 2]
+                    orientation = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                    grasp_poses = grasp_poses @ np.linalg.inv(orientation)[None, :, :]
+                    
+                    all_pts = []
+                    seg_ids = []
+                    for i, pcd in seg_pcds.items():
+                        all_pts.append(pcd)
+                        seg_ids.append(np.ones(len(pcd), dtype=np.int32) * i)
+                        
+                    all_pts = np.concatenate(all_pts, axis=0)
+                    seg_ids = np.concatenate(seg_ids, axis=0)
+                    target_pts = all_pts[seg_ids == unique_id]
+                    scene_pts = all_pts[seg_ids != unique_id]
+                    target_pcd = o3d.geometry.PointCloud(); target_pcd.points = o3d.utility.Vector3dVector(target_pts)
+                    scene_pcd = o3d.geometry.PointCloud(); scene_pcd.points = o3d.utility.Vector3dVector(scene_pts)
+
+                    complete_pc, _, \
+                        target_index, target_mean = \
+                            BulletEvaluator.process_point_clouds(target_pcd, scene_pcd, model.num_scene_points)
+                    
+                    np.savez(
+                        os.path.join(save_dir, f"seed{seed}-obj{num_object}-t{unique_id}.npz"),
+                        scene_pts = complete_pc, # + target_mean,
+                        target_index = target_index,
+                        grasps = grasp_poses[results > 0, :, :],
+                        F_grasps = grasp_poses[results == 0, :, :],
+                    )
             
-        child_conn.send(("result", (total_trials, success_trials)))
+        child_conn.send(("result", cate_results))
         return 
     
-    def process_point_clouds(self, target_pcd, scene_pcd):
+    @staticmethod
+    def process_point_clouds(target_pcd, scene_pcd, 
+                                dnum_scene_points=-1, dnum_target_pts=512):
+        """
+        Process Point Cloud
+        """
         # normalize & scale
         num_target_pts = np.asarray(target_pcd.points).shape[0]
-        desired_num_target_pts = 512 if model.num_scene_points > 0 else 1024
+        desired_num_target_pts = dnum_target_pts if dnum_scene_points > 0 else 1024
         if num_target_pts > desired_num_target_pts:
             target_pcd = target_pcd.farthest_point_down_sample(desired_num_target_pts)
         elif num_target_pts < 128:
@@ -261,11 +297,11 @@ class BulletEvaluator:
             croped_scene_num_pts = len(croped_scene_pcd.points)
         
         scene_pcd = croped_scene_pcd
-        if len(scene_pcd.points) > 512:
-            scene_pcd = scene_pcd.farthest_point_down_sample(512)
+        num_scene_points = 1024 if dnum_scene_points <= 0 else dnum_scene_points
+        if len(scene_pcd.points) > num_scene_points:
+            scene_pcd = scene_pcd.farthest_point_down_sample(num_scene_points)
             
         target_mean = np.mean(np.asarray(target_pcd.points), axis=0)
-        
         complete_pc = np.concatenate([np.asarray(target_pcd.points), np.asarray(scene_pcd.points)], axis=0)
         target_index = np.concatenate([np.ones(len(target_pcd.points)), np.zeros(len(scene_pcd.points))], axis=0)
         complete_pc_norm = (complete_pc - target_mean) * 8
@@ -281,12 +317,12 @@ class BulletEvaluator:
         seg_ids = []
         for i, pcd in pts.items():
             all_pts.append(pcd)
-            seg_ids.append(np.ones(len(pcd)) * i)
+            seg_ids.append(np.ones(len(pcd), dtype=np.int32) * i)
             
         all_pts = np.concatenate(all_pts, axis=0)
         seg_ids = np.concatenate(seg_ids, axis=0)
         unique_ids = np.unique(seg_ids)
-        grasps_ids = {}
+        grasps_ids, scores_ids = {}, {}
         
         for i in unique_ids:
             if i < 2:
@@ -299,7 +335,7 @@ class BulletEvaluator:
             scene_pcd = o3d.geometry.PointCloud(); scene_pcd.points = o3d.utility.Vector3dVector(scene_pts)
             complete_pc, complete_pc_norm, \
                     target_index, target_mean = \
-                        self.process_point_clouds(target_pcd, scene_pcd)
+                        BulletEvaluator.process_point_clouds(target_pcd, scene_pcd, model.num_scene_points)
             if complete_pc_norm is None:
                 continue 
                 
@@ -322,6 +358,7 @@ class BulletEvaluator:
             grasp_poses[:, :3, 3] += 0.04 * grasp_poses[:, :3, 2]
             grasp_poses = grasp_poses @ orientation[None, :, :]
             grasps_ids[i] = grasp_poses
+            scores_ids[i] = scores.cpu().numpy().reshape(-1)
             
             # for grasp in grasp_poses:
             #     execute_grasp = grasp.copy()
@@ -329,7 +366,7 @@ class BulletEvaluator:
             #     execute_grasp[:3, 3] += 0.04 * execute_grasp[:3, 2]
             #     execute_grasp = execute_grasp @ np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
                         
-        return grasps_ids
+        return grasps_ids, scores_ids
     
     def run_multiple_process(self, model, num_objects, seeds, num_processes=4):
         """ Run the evaluation in multiple processes """
@@ -339,8 +376,9 @@ class BulletEvaluator:
         num_pairs = len(object_seed_pairs)
         
         # create pipes for communication
+        # the key is experiment id
         process_pool, parent_conns, queues = {}, {}, {}
-        results = {}
+        gts, preds = {}, {}
         
         def __wait_process():
             finish_ids = []
@@ -354,12 +392,13 @@ class BulletEvaluator:
                     if data[0] == 'input':
                         # run something
                         pts = queues[i].get()
-                        grasps_ids = self._run_model(model, pts)
+                        grasps_ids, scores_ids = self._run_model(model, pts)
+                        preds[i] = scores_ids
                         
                         # send the point clouds to the child process
                         conn.send(grasps_ids)
                     else:
-                        results[i] = data[1]
+                        gts[i] = data[1]
                         process_pool[i].join()
                         finish_ids.append(i)
             
@@ -385,7 +424,8 @@ class BulletEvaluator:
                 q = Queue()
                 
                 # create a new process
-                p = Process(target=self.__evaluate_grasps, args=(n, s, child_conn, q))
+                save_dir = self.save_dir if self.save_data else None
+                p = Process(target=self.__evaluate_grasps, args=(n, s, child_conn, q, save_dir))
                 p.start()
                 process_pool[idx] = p
                 parent_conns[idx] = parent_conn
@@ -397,23 +437,8 @@ class BulletEvaluator:
         
         while len(process_pool) > 0:
             __wait_process()
-        
-        
-        stats = {}
-        for exp_id, pair in enumerate(object_seed_pairs):
-            n, s = pair
-            if exp_id in results:
-                total_trials, success_trials = results[exp_id]
-                
-                if n not in stats:
-                    stats[n] = [0, 0]
-                    
-                stats[n][0] += len(total_trials)
-                stats[n][1] += np.sum(np.array(success_trials) > 0).item()
-        
-        for k, v in stats.items():
-            print(f"No. objs {k}, total trial {v[0]}, success {v[1]}")
-        
+
+        return gts, preds, object_seed_pairs
                 
     def get_dataset(self, timestep, num_objects, dataset_args={}):
         if len(timestep) == 0:
@@ -452,10 +477,11 @@ if __name__ == '__main__':
     args.add_argument("--num_objects", type=int, default=2, help='number of objects to evaluate on')
     args.add_argument("--num_seeds", type=int, default=2, help='number of seeds to test on')
     args.add_argument("--num_processes", type=int, default=1, help='number of seeds to test on')
+    args.add_argument("--num_grasps", type=int, default=128, help='number of grasps')
     opt = args.parse_args()
 
     save_dir = opt.save_dir
-    evaluator = BulletEvaluator(save_dir, num_grasps=512, save_data=opt.save_data)
+    evaluator = BulletEvaluator(save_dir, num_grasps=opt.num_grasps, save_data=opt.save_data)
     
     assert opt.num_objects > 1, "Number of objects must be greater than 1"
     
@@ -465,6 +491,7 @@ if __name__ == '__main__':
     model.to(device)
     
     model_states = torch.load(opt.weight, map_location=device)
+    weight_name = opt.weight.split('/')[-1].split('.')[0]
     if 'model_state' in model_states:
         model.load_state_dict(model_states["model_state"])
     else:
@@ -474,9 +501,63 @@ if __name__ == '__main__':
     success_exps = []
     
     if opt.num_processes > 1:
-        evaluator.run_multiple_process(model, 
+        gts, preds, object_seed_pairs = evaluator.run_multiple_process(model, 
                                     list(range(2, opt.num_objects + 1)), 
                                     list(range(opt.num_seeds)), num_processes=opt.num_processes)
+    
+        
+        stats = {}
+        total_pred = []
+        total_gt = []
+        for exp_id, pair in enumerate(object_seed_pairs):
+            n, s = pair
+            if exp_id in gts:
+                cates_gt = gts[exp_id]
+                
+                # collect success rate
+                if n not in stats:
+                    stats[n] = [0, 0]
+                for results in cates_gt.values():
+                    stats[n][0] += 1
+                    stats[n][1] += 1 if np.any(results > 0) else 0 
+                      
+                cates_pred = preds[exp_id]
+                for unique_id in cates_pred:
+                    p, g = cates_pred[unique_id], cates_gt[unique_id]
+                    total_pred.append(p)
+                    total_gt.append(g)            
+
+        for k, v in stats.items():
+            print(f"No. objs {k}, total trial {v[0]}, success {v[1]}")
+            
+        import matplotlib.pyplot as plt
+        total_pred = np.concatenate(total_pred, axis=0)
+        total_gt = np.concatenate(total_gt, axis=0)
+        # plt.figure()
+        # plt.scatter(total_gt, total_pred, marker='+')
+        # plt.xlabel("GT")
+        # plt.ylabel("Pred")
+        # plt.savefig("calib.png")
+        
+        # get quantiles 0.5
+        n_bins = 15
+        pred_q = np.quantile(total_pred, np.linspace(0, 1, n_bins + 1))
+        sr = []
+        for i in range(n_bins):
+            sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
+        
+        expname = opt.spec_file.split("/")[-1]
+        plt.figure()
+        plt.plot(np.arange(n_bins) / n_bins, sr)
+        ax = plt.gca()
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xtitle("Quantile")
+        ax.set_ytitle("SR")
+        plt.savefig(f"{expname}-{weight_name}-calib.png")
+        
+        np.savez(f"{expname}-{weight_name}-calib.npz", xaxis=np.arange(n_bins) / n_bins, yaxis=sr)
+            
     else:
         evaluator.evaluate_model(
             model, 1000, opt.num_objects, opt.num_seeds, opt.viz

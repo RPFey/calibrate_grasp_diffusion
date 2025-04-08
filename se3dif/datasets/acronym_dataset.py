@@ -460,7 +460,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         self.class_type = class_type
         self.visualize = visualize
         self.num_pos = num_grasps
-        self.num_neg = 3 * self.num_pos
+        self.num_neg = self.num_pos
         self.num_scene_pts = num_scene_pts
         self.num_target_pts = num_target_pts
         self.scale = 8.
@@ -540,6 +540,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         
         # downsample grasps for training 
         if self.split == 'train': 
+            valid_H_grasps = np.ones((self.num_pos, ))
             if len(H_grasps) > self.num_pos:
                 # draw without replacement
                 rix = np.random.choice(len(H_grasps), size=self.num_pos, replace=False)
@@ -547,6 +548,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             elif len(H_grasps) < self.num_pos:
                 rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_pos - len(H_grasps))
                 H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
+                valid_H_grasps[len(H_grasps):] = 0
 
             if len(F_grasps) > self.num_neg:
                 # draw without replacement
@@ -555,6 +557,9 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
             elif len(F_grasps) < self.num_neg:
                 rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_neg - len(F_grasps))
                 F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
+        else:
+            valid_H_grasps = np.ones((H_grasps.shape[0], ))
+        
         #######################
         
         # concatenate target index
@@ -630,6 +635,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         res = {'visual_context': torch.from_numpy(pcl).float(),
                'x_sdf': torch.from_numpy(query_pts).float(),
                'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'valid_ene_pos': torch.from_numpy(valid_H_grasps).float(),
                'x_neg_ene': torch.from_numpy(F_grasps).float(),
                'target_index': torch.from_numpy(target_index).float(),
                'scale': torch.Tensor([self.scale]).float()}

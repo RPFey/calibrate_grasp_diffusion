@@ -201,7 +201,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 # if summary_fn is not None:
                 #     summary_fn(model, model_input, gt, iter_info, writer, total_steps)
             
-            if (not epoch % epochs_til_checkpoint) and rank == 0:
+            if (not epoch % epochs_til_checkpoint) and rank == 0 and epoch > 0:
 
                 print("Save Checkpoint ... ")
                 state_dict = {
@@ -217,32 +217,31 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                          device=device, writer=writer, epoch=epoch, total_steps=total_steps)
 
                     # run bullet_evaluator
-                    if run_bullet:
-                        tmp_dir = os.path.join(model_dir, 'tmp')
-                        os.makedirs(tmp_dir, exist_ok=True)
-                        evaluator = BulletEvaluator(tmp_dir)
-                        
-                        try:
-                            for n in range(2, 8):
-                                random_seeds = np.random.choice(int(1e4), (32, ), replace=False)
-                                # random sample 20 seeds from 
-                                totals = 0
-                                successes = 0
-                                
-                                for s in random_seeds:
-                                    total, success = evaluator.evaluate_model(model, total_steps, n, s)
-                                    totals += sum(total )
-                                    successes += sum(success)
-                                    
-                                success_ratio = successes / totals
-                                writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
-
-                                if successes <= 0:
-                                    raise StopIteration(f"Bullet evaluation failed at {n}")
-                        
-                        except StopIteration as e:
-                            print(e)
+                    tmp_dir = os.path.join(model_dir, 'tmp')
+                    evaluator = BulletEvaluator(tmp_dir, 64, save_data = run_bullet)   
+                    try:
+                        for n in [2, 4, 8]:
+                            random_seeds = np.random.choice(int(1e4), (4, ), replace=False)
+                            # random sample 20 seeds from 
+                            totals = 0
+                            successes = 0
                             
+                            for s in random_seeds:
+                                total, success = evaluator.evaluate_model(model, total_steps, n, s)
+                                totals += len(total)
+                                successes += sum(np.array(success) > 0).item()
+                                
+                            success_ratio = successes / totals
+                            writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
+
+                            if successes <= 0:
+                                raise StopIteration(f"Bullet evaluation failed at {n}")
+                    
+                    except StopIteration as e:
+                        print(e)
+                    
+                    # create & add new bullet dataset
+                    if run_bullet:
                         complementary_dataset = evaluator.get_dataset([total_steps], list(range(2, 8)),
                                                                     dataset_args = {"num_scene_pts": acronym_dataset.num_scene_pts, 
                                                                                         "num_target_pts": acronym_dataset.num_target_pts} )
@@ -446,40 +445,6 @@ def train_ebm(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til
                 if val_dataloader is not None:
                     eval(model, val_dataloader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn,
                          device=device, writer=writer, epoch=epoch, total_steps=total_steps)
-
-                    # run bullet_evaluator
-                    if run_bullet:
-                        tmp_dir = os.path.join(model_dir, 'tmp')
-                        os.makedirs(tmp_dir, exist_ok=True)
-                        evaluator = BulletEvaluator(tmp_dir)
-                        
-                        try:
-                            for n in range(2, 8):
-                                random_seeds = np.random.choice(int(1e4), (32, ), replace=False)
-                                # random sample 20 seeds from 
-                                totals = 0
-                                successes = 0
-                                
-                                for s in random_seeds:
-                                    total, success = evaluator.evaluate_model(model, total_steps, n, s)
-                                    totals += sum(total )
-                                    successes += sum(success)
-                                    
-                                success_ratio = successes / totals
-                                writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
-
-                                if successes <= 0:
-                                    raise StopIteration(f"Bullet evaluation failed at {n}")
-                        
-                        except StopIteration as e:
-                            print(e)
-                            
-                        complementary_dataset = evaluator.get_dataset([total_steps], list(range(2, 8)),
-                                                                    dataset_args = {"num_scene_pts": acronym_dataset.num_scene_pts, 
-                                                                                        "num_target_pts": acronym_dataset.num_target_pts} )
-                        complementary_dataloader = DataLoader(complementary_dataset, 
-                                                                batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
-                        full_loader = [complementary_dataloader, train_dataloader]
 
             if max_steps is not None and total_steps==max_steps:
                 break

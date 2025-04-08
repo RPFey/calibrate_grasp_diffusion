@@ -144,8 +144,12 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     # vision encoder
     # Energy Based Model
     num_scene_points = args.get('num_scene_points', -1)
-    in_features = 4 if num_scene_points > 0 else 3
-    vision_encoder = models.vision_encoder.VNNPointnet2(out_features=v_enc_params['latent_size'], device=device, in_features=in_features)
+    if v_enc_params.get('type', 'none') == 'vnn2':
+        in_features = 3
+        vision_encoder = models.vision_encoder.VNN2Pointnet2(out_features=v_enc_params['latent_size'], device=device, in_features=in_features)
+    else:
+        in_features = 4 if num_scene_points > 0 else 3
+        vision_encoder = models.vision_encoder.VNNPointnet2(out_features=v_enc_params['latent_size'], device=device, in_features=in_features)
     # Geometry encoder
     geometry_encoder = models.geometry_encoder.map_projected_points
     # Feature Encoder
@@ -187,8 +191,13 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
-    elif distribution == 'dirichlet':
-        energy_net = DirichletEnergy(in_dim, hidden_dim)
+    elif distribution in ['dirichlet', 'dirichlet_neg']:
+        energy_net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2),
+        )
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
     

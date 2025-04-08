@@ -96,7 +96,7 @@ class DirichletLoss():
         labels = torch.cat((label, n_label), dim=0)
         random_t = torch.rand((labels.shape[0], )).to(labels.device) * (1 - self.eps) + self.eps
         logits = model.get_logits(labels, random_t) # (N, 2)
-        alphas = logits + 1
+        alphas = torch.exp(logits) + 1
         S = alphas.sum(dim=-1, keepdim=True) # (N, 1)
         ps = alphas / S
         
@@ -188,12 +188,12 @@ class APLossImpl (nn.Module):
     
     
 class APLoss():
-    def __init__(self, field='ap', eps=1e-6, T = 30):
+    def __init__(self, field='ap', eps=1e-6, weight=1.0):
         self.field = field
         self.eps = eps
-        self.T = T
         self.ap_impl = APLossImpl()
         self.ap_impl.to(torch.device("cuda:0"))
+        self.weight = weight
 
     def __call__(self, model:models.GraspDiffusionFields, model_input,
                     ground_truth, val=False):
@@ -212,17 +212,17 @@ class APLoss():
         labels[:, pos_num:] = 0
         ap_loss = self.ap_impl(prob, labels)
 
-        loss_dict[self.field] = ap_loss
+        loss_dict[self.field] = self.weight * ap_loss
         info = {'ap': 1 - ap_loss.item()}
         return loss_dict, info
     
 class DirichletAPLoss():
-    def __init__(self, field='dirichlet_ap', eps=1e-6, T = 30):
+    def __init__(self, field='dirichlet_ap', mode="direct", eps=1e-6):
         self.field = field
         self.eps = eps
-        self.T = T
         self.ap_impl = APLossImpl()
         self.ap_impl.to(torch.device("cuda:0"))
+        self.mode = mode
 
     def __call__(self, model:models.GraspDiffusionFields, model_input,
                     ground_truth, val=False):
@@ -234,35 +234,53 @@ class DirichletAPLoss():
 
         random_t = torch.rand((grasps.shape[0], )).to(grasps.device) * (1 - self.eps) + self.eps
         logits = model.get_logits(grasps, random_t) # (BN, 2)
-        alphas = logits + 1
-        S = alphas.sum(dim=-1, keepdim=True) # (BN, 1)
-        ps = alphas / S
-        ps = ps.view(batch_size, -1, 2)
-        
-        targets = torch.zeros_like(ps)
-        targets[:, :pos_num, 0] = 1
-        targets[:, pos_num:, 1] = 1
-        
-        ap_loss = self.ap_impl(ps[..., 0], targets[..., 0]) # + \
-                    # self.ap_impl(ps[..., 1], targets[..., 1])
-        
+        alphas = torch.exp(logits) + 1
+        S = alphas.sum(dim=-1)
+        prob = (alphas[:, 0] / S).reshape(batch_size, -1) # (B, N)
+            
+        if self.mode == "direct":
+            targets = torch.zeros_like(prob)
+            targets[:, :pos_num] = 1
+            ap_loss = self.ap_impl(prob, targets)
+        elif self.mode == "inverse":
+            targets = torch.zeros_like(prob)
+            targets[:, pos_num:] = 1
+            ap_loss = self.ap_impl(1 - prob, targets)
+        else:
+            targets_pos = torch.zeros_like(prob)
+            targets_pos[:, :pos_num] = 1
+            ap_loss_pos = self.ap_impl(prob, targets_pos)
+            
+            targets_neg = torch.zeros_like(prob)
+            targets_neg[:, pos_num:] = 1
+            ap_loss_neg = self.ap_impl(1 - prob, targets_neg)
+            ap_loss = (ap_loss_pos + ap_loss_neg) / 2
+            
+        loss_dict[self.field] = ap_loss
         info = {'ap': 1 - ap_loss.item()} 
         return loss_dict, info
     
 class EBMLoss():
-    def __init__(self, field='ebm'):
+    def __init__(self, field='ebm', regularization=0.01):
+        self.regularization = regularization
         self.field = field
         
     def __call__(self, model:models.GraspDiffusionFields, 
                     model_input, ground_truth, val=False):
         loss_dict = dict()
         label = model_input["x_ene_pos"].reshape(-1, 4, 4)
-        n_label = model_input["generated_grasps"].reshape(-1, 4, 4) # 
+        if 'generated_grasps' in model_input:
+            n_label = model_input["generated_grasps"].reshape(-1, 4, 4)
+        else:
+            return None, {}
+        
         pos_energy = model(label)
         neg_energy = model(n_label)
 
         info = {} 
-        loss = torch.mean(pos_energy) - torch.mean(neg_energy)
+        loss = torch.mean(pos_energy) - torch.mean(neg_energy) + \
+                self.regularization * torch.mean(pos_energy ** 2) + \
+                self.regularization * torch.mean(neg_energy ** 2)
         loss_dict[self.field] = loss
         info['pos_energy'] = pos_energy.mean().item()
         info['neg_energy'] = neg_energy.mean().item()   

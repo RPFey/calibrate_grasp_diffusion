@@ -50,6 +50,9 @@ def get_graph_feature_cross(x, k=20, idx=None, device='cpu'):
         x: input points of shape [B, 1, N_feat, N_samples]
         k: number of neighbors
         idx: indices of neighbors
+        
+    Return:
+        feat: (B, C, 3, N, K)
     """
     batch_size = x.size(0)
     num_points = x.size(3)
@@ -77,7 +80,7 @@ def get_graph_feature_cross(x, k=20, idx=None, device='cpu'):
     feature = feature.permute(0, 3, 4, 1, 2).contiguous() # (B, C, 3, N, K)
     
     if x.shape[2] > 3:
-        extra = x[:, :, 3:, :] # (B, C - 3, N_feat, N_samples)
+        extra = x[:, :, 3:, :] # (B, 1, C-3, N_samples)
         extra = extra.view(batch_size, -1, num_points) # (B, C - 3, N_samples)
         extra = extra.transpose(2, 1).contiguous()  # (B, C - 3, N)  -> (B, N, C - 3)
         extra_feature = extra.view(batch_size * num_points, -1)[idx, :]

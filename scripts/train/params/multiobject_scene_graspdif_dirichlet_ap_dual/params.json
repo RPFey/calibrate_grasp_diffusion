@@ -1,14 +1,14 @@
 {
   "Description" : [ "This experiment trains jointly an SDF model and a SE(3) Grasp Energy" ],
-  "exp_log_dir": "multiobject_scene_graspdif_bernoulli_ebm",
+  "exp_log_dir": "multiobject_scene_graspdif_dirichlet_ap_dual",
   "single_object": false,
-  "distribution": "bernoulli",
+  "distribution": "dirichlet",
   "num_scene_points": 512,
   "num_target_points": 512,
   "TrainSpecs": {
     "batch_size": 24,
     "num_epochs": 20000,
-    "steps_til_summary": 2500,
+    "steps_til_summary": 500,
     "iters_til_checkpoint": 5000,
     "epochs_til_checkpoint": 100
   },
@@ -34,8 +34,8 @@
     },
     "points": {
       "n_points": 30,
-      "loc": [0.0, 0.0, 0.06],
-      "scale": [8.0, 8.0, 8.0]
+      "loc": [0.0, 0.0, 0.5],
+      "scale": [0.7, 0.5, 0.7]
     },
     "decoder": {
       "hidden_dim": 512
@@ -60,9 +60,12 @@
       "Interval" : 500,
       "Factor" : 0.5
     }],
-  "Losses": {
-    "sdf_loss": {}, 
-    "ebm_loss": {},
-    "celoss": {}
+  "Losses": 
+  {
+    "sdf_loss": {},
+    "projected_denoising_loss": {},
+    "dirichlet_aploss": {
+      "mode": "dual"
+    }
   }
 }
