@@ -60,5 +60,10 @@
       "Interval" : 500,
       "Factor" : 0.5
     }],
-  "Losses": ["sdf_loss", "projected_denoising_loss", "aploss"]
+  "Losses": 
+  {
+    "sdf_loss": {},
+    "projected_denoising_loss": {},
+    "aploss": {}
+  }
 }
