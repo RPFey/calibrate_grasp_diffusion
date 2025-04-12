@@ -18,6 +18,14 @@ cd ~/calibrate_grasp_diffusion
 
 SPEC_FILE=$1
 
+# take second as weight, default to none
+if [ -z "$2" ]
+then
+    WEIGHTS="none"
+else
+    WEIGHTS=$2
+fi
+
 hostname
 echo $SPEC_FILE
 
@@ -25,14 +33,18 @@ source /mnt/kostas-graid/sw/envs/boshu/miniconda3/bin/activate se3diff
 export PYOPENGL_PLATFORM=egl
 
 whereis python3.11
-srun python3.11 \
+# if weight is none, evaluate all weights
+if [ "$WEIGHTS" = "none" ]; then
+    srun python3.11 \
         scripts/train/train_scene_pointcloud_6d_grasp_diffusion.py \
-        --saving_root logs/partial_prev_375b35/ \
+        --saving_root logs/partial/ \
         --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048/ \
         --eval --spec_file ${SPEC_FILE}
-
-# python3.11 \
-#         scripts/train/train_scene_pointcloud_6d_grasp_diffusion.py \
-#         --saving_root logs/partial_prev_375b35/ \
-#         --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048/ \
-#         --eval --spec_file multiobject_scene_graspdif_bernoulli_ap
+else
+    echo "Evaluating with weights: ${WEIGHTS}"
+    srun python3.11 \
+        scripts/train/train_scene_pointcloud_6d_grasp_diffusion.py \
+        --saving_root logs/partial/ \
+        --data_root /mnt/kostas-graid/datasets/boshu/grasp/data/partial_scene_2048/ \
+        --eval --eval_ckpt ${WEIGHTS} --spec_file ${SPEC_FILE}
+fi

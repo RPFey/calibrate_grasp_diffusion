@@ -84,12 +84,13 @@ def main(opt):
         device = torch.device('cpu')
 
     ## Dataset
-    
-    train_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,
+    # TODO Bullet - indicates dataset generated from pybullet exps.
+    cls_types = ['Cup', 'Mug', 'Fork', 'Hat', 'Bottle', 'Bowl', 'Car', 'Donut', 'Laptop', 'MousePad', 'Pencil']
+    train_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root, class_type=cls_types, split='train',
                                                                     num_scene_pts=args["num_scene_points"], num_target_pts=args["num_target_points"])
     train_dataloader = DataLoader(train_dataset, num_workers = opt.num_workers, batch_size=args['TrainSpecs']['batch_size'], 
                                   shuffle=True, drop_last=True, pin_memory=True)
-    test_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,  split='test',
+    test_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(opt.data_root,  split='test', class_type=cls_types,
                                                                 num_scene_pts=args["num_scene_points"], num_target_pts=args["num_target_points"])
     test_dataloader = DataLoader(test_dataset, num_workers = 1, batch_size=1, shuffle=False, drop_last=True,
                                  pin_memory=True)

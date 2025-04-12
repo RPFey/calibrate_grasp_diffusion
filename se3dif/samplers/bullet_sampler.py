@@ -6,6 +6,7 @@ import os, os.path as osp
 import open3d as o3d
 import glob
 from torch.utils.data import Dataset, DataLoader
+import multiprocessing as mp
 from multiprocessing import Process, Pipe, Queue
 import time
 
@@ -20,6 +21,103 @@ from franka_env.grasp_generator import ClutterRemovalSim, render_images, evaluat
 from franka_env.btsim import Rotation, Transform, CameraIntrinsic
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+def evaluate_grasps(num_object, seed, child_conn, queue, save_dir):
+    sim = ClutterRemovalSim("pile", gui=False, seed=seed)
+    sim.reset(num_object)
+    sim.save_state()
+    
+    n = 8 # np.random.randint(MAX_VIEWPOINT_COUNT) + 1
+    depth_imgs, extrinsics, segs = render_images(sim, n)
+    
+    # create point cloud using open3d
+    intrinsics = o3d.camera.PinholeCameraIntrinsic(
+        width=depth_imgs[0].shape[1],
+        height=depth_imgs[0].shape[0],
+        fx=sim.camera.intrinsic.fx,
+        fy=sim.camera.intrinsic.fy,
+        cx=sim.camera.intrinsic.cx,
+        cy=sim.camera.intrinsic.cy
+    )
+    
+    # find all visible indices
+    all_segs = np.stack(segs, axis=0)
+    unique_ids = np.unique(all_segs)
+    print("Unique IDs: ", unique_ids)
+    
+    # hold ids >= 2 and all other ids are set to 0
+    unique_ids = np.where(unique_ids < 2, 0, unique_ids)
+    all_segs = np.where(all_segs < 2, 0, all_segs)
+    seg_pcds = {i: o3d.geometry.PointCloud() for i in unique_ids} 
+    
+    # back project 
+    for depth, ext, seg in zip(depth_imgs, extrinsics, segs):
+        for target in unique_ids:
+            depth_image = o3d.geometry.Image(depth * (seg == target))
+            seg_pcds[target] += o3d.geometry.PointCloud.create_from_depth_image(
+                depth_image, intrinsics, extrinsic = Transform.from_list(ext).as_matrix(), depth_scale=1.0, depth_trunc=2.0
+            )  
+    
+    seg_pcds = {k: np.asarray(v.points) for k, v in seg_pcds.items()}  
+    queue.put(seg_pcds)
+    child_conn.send(("input", ))
+    
+    # wait for the parent process to finish
+    child_conn.poll(None)
+    
+    # receive all the grasps for each category
+    all_grasps = child_conn.recv()
+    
+    cate_results = {}
+    for unique_id, grasp_poses in all_grasps.items():    
+        # evaluate 
+        if len(grasp_poses) > 0:
+            results = []
+            for execute_grasp in grasp_poses:
+                sim.restore_state()
+                outcome, width = evaluate_grasp_pose(sim, execute_grasp, target_id=int(unique_id))
+                if outcome == Label.SUCCESS:
+                    # print("Grasp success")
+                    results.append(1)
+                else:
+                    results.append(0)
+            
+            results = np.array(results, dtype=np.uint8)
+            cate_results[unique_id] = results
+            
+            # save results
+            if save_dir is not None and np.any(results > 0):
+                grasp_poses[:, :3, 3] -= 0.04 * grasp_poses[:, :3, 2]
+                orientation = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                grasp_poses = grasp_poses @ np.linalg.inv(orientation)[None, :, :]
+                
+                all_pts = []
+                seg_ids = []
+                for i, pcd in seg_pcds.items():
+                    all_pts.append(pcd)
+                    seg_ids.append(np.ones(len(pcd), dtype=np.int32) * i)
+                    
+                all_pts = np.concatenate(all_pts, axis=0)
+                seg_ids = np.concatenate(seg_ids, axis=0)
+                target_pts = all_pts[seg_ids == unique_id]
+                scene_pts = all_pts[seg_ids != unique_id]
+                target_pcd = o3d.geometry.PointCloud(); target_pcd.points = o3d.utility.Vector3dVector(target_pts)
+                scene_pcd = o3d.geometry.PointCloud(); scene_pcd.points = o3d.utility.Vector3dVector(scene_pts)
+
+                complete_pc, _, \
+                    target_index, target_mean = \
+                        BulletEvaluator.process_point_clouds(target_pcd, scene_pcd, 2048, 2048)
+                
+                np.savez(
+                    os.path.join(save_dir, f"seed{seed}-obj{num_object}-t{unique_id}.npz"),
+                    scene_pts = complete_pc, # + target_mean,
+                    target_index = target_index,
+                    grasps = grasp_poses[results > 0, :, :],
+                    F_grasps = grasp_poses[results == 0, :, :],
+                )
+        
+    child_conn.send(("result", cate_results))
+    return 
 
 class BulletEvaluator:
     def __init__(self, save_dir, num_grasps = 512, save_data = True):
@@ -169,103 +267,6 @@ class BulletEvaluator:
                 total_trials.append(total_trial)
         
         return total_trials, success_trials 
-                
-    def __evaluate_grasps(self, num_object, seed, child_conn, queue, save_dir):
-        sim = ClutterRemovalSim("pile", gui=False, seed=seed)
-        sim.reset(num_object)
-        sim.save_state()
-        
-        n = 8 # np.random.randint(MAX_VIEWPOINT_COUNT) + 1
-        depth_imgs, extrinsics, segs = render_images(sim, n)
-        
-        # create point cloud using open3d
-        intrinsics = o3d.camera.PinholeCameraIntrinsic(
-            width=depth_imgs[0].shape[1],
-            height=depth_imgs[0].shape[0],
-            fx=sim.camera.intrinsic.fx,
-            fy=sim.camera.intrinsic.fy,
-            cx=sim.camera.intrinsic.cx,
-            cy=sim.camera.intrinsic.cy
-        )
-        
-        # find all visible indices
-        all_segs = np.stack(segs, axis=0)
-        unique_ids = np.unique(all_segs)
-        print("Unique IDs: ", unique_ids)
-        
-        # hold ids >= 2 and all other ids are set to 0
-        unique_ids = np.where(unique_ids < 2, 0, unique_ids)
-        all_segs = np.where(all_segs < 2, 0, all_segs)
-        seg_pcds = {i: o3d.geometry.PointCloud() for i in unique_ids} 
-        
-        # back project 
-        for depth, ext, seg in zip(depth_imgs, extrinsics, segs):
-            for target in unique_ids:
-                depth_image = o3d.geometry.Image(depth * (seg == target))
-                seg_pcds[target] += o3d.geometry.PointCloud.create_from_depth_image(
-                    depth_image, intrinsics, extrinsic = Transform.from_list(ext).as_matrix(), depth_scale=1.0, depth_trunc=2.0
-                )  
-        
-        seg_pcds = {k: np.asarray(v.points) for k, v in seg_pcds.items()}  
-        queue.put(seg_pcds)
-        child_conn.send(("input", ))
-        
-        # wait for the parent process to finish
-        child_conn.poll(None)
-        
-        # receive all the grasps for each category
-        all_grasps = child_conn.recv()
-        
-        cate_results = {}
-        for unique_id, grasp_poses in all_grasps.items():    
-            # evaluate 
-            if len(grasp_poses) > 0:
-                results = []
-                for execute_grasp in grasp_poses:
-                    sim.restore_state()
-                    outcome, width = evaluate_grasp_pose(sim, execute_grasp, target_id=int(unique_id))
-                    if outcome == Label.SUCCESS:
-                        # print("Grasp success")
-                        results.append(1)
-                    else:
-                        results.append(0)
-                
-                results = np.array(results, dtype=np.uint8)
-                cate_results[unique_id] = results
-                
-                # save results
-                if save_dir is not None and np.any(results > 0):
-                    grasp_poses[:, :3, 3] -= 0.04 * grasp_poses[:, :3, 2]
-                    orientation = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-                    grasp_poses = grasp_poses @ np.linalg.inv(orientation)[None, :, :]
-                    
-                    all_pts = []
-                    seg_ids = []
-                    for i, pcd in seg_pcds.items():
-                        all_pts.append(pcd)
-                        seg_ids.append(np.ones(len(pcd), dtype=np.int32) * i)
-                        
-                    all_pts = np.concatenate(all_pts, axis=0)
-                    seg_ids = np.concatenate(seg_ids, axis=0)
-                    target_pts = all_pts[seg_ids == unique_id]
-                    scene_pts = all_pts[seg_ids != unique_id]
-                    target_pcd = o3d.geometry.PointCloud(); target_pcd.points = o3d.utility.Vector3dVector(target_pts)
-                    scene_pcd = o3d.geometry.PointCloud(); scene_pcd.points = o3d.utility.Vector3dVector(scene_pts)
-
-                    complete_pc, _, \
-                        target_index, target_mean = \
-                            BulletEvaluator.process_point_clouds(target_pcd, scene_pcd, model.num_scene_points)
-                    
-                    np.savez(
-                        os.path.join(save_dir, f"seed{seed}-obj{num_object}-t{unique_id}.npz"),
-                        scene_pts = complete_pc, # + target_mean,
-                        target_index = target_index,
-                        grasps = grasp_poses[results > 0, :, :],
-                        F_grasps = grasp_poses[results == 0, :, :],
-                    )
-            
-        child_conn.send(("result", cate_results))
-        return 
     
     @staticmethod
     def process_point_clouds(target_pcd, scene_pcd, 
@@ -350,6 +351,16 @@ class BulletEvaluator:
                 model.set_latent(target_pc)    
             
             grasp_poses, scores = sampler.sample()
+            scores = -1 * scores.reshape(-1)
+            # normalize
+            # scores = torch.exp(scores - scores.max()) if model.distribution == 'direct' \
+            #             else torch.exp(scores)
+            if model.distribution == 'direct':
+                # scores = torch.exp(scores)
+                scores = (scores - scores.min()) / (scores.max() - scores.min())
+            else:
+                scores = torch.exp(scores)
+            
             grasp_poses = grasp_poses.cpu().numpy()
             grasp_poses[:, :3, 3] = (grasp_poses[:, :3, 3] / 8) + target_mean
             
@@ -358,7 +369,7 @@ class BulletEvaluator:
             grasp_poses[:, :3, 3] += 0.04 * grasp_poses[:, :3, 2]
             grasp_poses = grasp_poses @ orientation[None, :, :]
             grasps_ids[i] = grasp_poses
-            scores_ids[i] = scores.cpu().numpy().reshape(-1)
+            scores_ids[i] = scores.cpu().numpy()
             
             # for grasp in grasp_poses:
             #     execute_grasp = grasp.copy()
@@ -425,7 +436,7 @@ class BulletEvaluator:
                 
                 # create a new process
                 save_dir = self.save_dir if self.save_data else None
-                p = Process(target=self.__evaluate_grasps, args=(n, s, child_conn, q, save_dir))
+                p = Process(target=evaluate_grasps, args=(n, s, child_conn, q, save_dir))
                 p.start()
                 process_pool[idx] = p
                 parent_conns[idx] = parent_conn
@@ -467,6 +478,7 @@ if __name__ == '__main__':
     from se3dif.utils import to_numpy, to_torch, load_experiment_specifications
     from se3dif.visualization import grasp_visualization
     import argparse
+    mp.set_start_method('spawn')
     
     args = argparse.ArgumentParser()
     args.add_argument("--spec_file", type=str, default="/root/spec")
@@ -541,7 +553,7 @@ if __name__ == '__main__':
         
         # get quantiles 0.5
         n_bins = 15
-        pred_q = np.quantile(total_pred, np.linspace(0, 1, n_bins + 1))
+        pred_q = np.linspace(0, 1, n_bins + 1)
         sr = []
         for i in range(n_bins):
             sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
@@ -552,11 +564,12 @@ if __name__ == '__main__':
         ax = plt.gca()
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
-        ax.set_xtitle("Quantile")
-        ax.set_ytitle("SR")
+        ax.set_xlabel("Quantile")
+        ax.set_ylabel("SR")
         plt.savefig(f"{expname}-{weight_name}-calib.png")
         
-        np.savez(f"{expname}-{weight_name}-calib.npz", xaxis=np.arange(n_bins) / n_bins, yaxis=sr)
+        np.savez(f"{expname}-{weight_name}-calib.npz", 
+                 xaxis=np.arange(n_bins) / n_bins, yaxis=sr, total_pred=total_pred, total_gt=total_gt)
             
     else:
         evaluator.evaluate_model(

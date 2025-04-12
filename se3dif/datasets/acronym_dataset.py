@@ -456,6 +456,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                                    'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
                                    'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
                         visualize = False, split = 'train', num_grasps = 128, num_scene_pts = 2048, num_target_pts = 1024, seed = 42):
+        
         # class_type = ['Cup']
         self.class_type = class_type
         self.visualize = visualize
@@ -465,11 +466,16 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
         self.num_target_pts = num_target_pts
         self.scale = 8.
         self.split = split
+        self.root_dir = root_dir
 
         rng = np.random.RandomState(seed)
         self.files = []
         for cls in self.class_type:
             cls_files = glob.glob(root_dir + '/' + cls + '/*.npz')
+            if len(cls_files) == 0:
+                print('No files found for class:', cls)
+                continue
+            
             rng.shuffle(cls_files)
             test_size = int(0.1 * len(cls_files))
             test_size = max(test_size, 1)
@@ -478,7 +484,7 @@ class PointcloudSceneAcronymAndSDFDataset(Dataset):
                 self.files = self.files + cls_files[:train_size]
             elif self.split == 'test':
                 self.files = self.files + cls_files[train_size:]
-
+                
     def __len__(self):
         return len(self.files)
 

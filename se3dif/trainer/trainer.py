@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
+from se3dif import datasets
 from se3dif.utils import makedirs, dict_to_device, ClusterStateManager, SO3_R3
 from se3dif.samplers.bullet_sampler import BulletEvaluator
 from se3dif.samplers import Grasp_AnnealedLD
@@ -104,10 +105,23 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
         logging.basicConfig(filename=os.path.join(summaries_dir, exp_name, 'training.log'), level=logging.INFO)
 
     full_loader = [train_dataloader]
+    val_dataloaders = {"acronym": val_dataloader}
+    
+    # create & add new bullet dataset
+    if run_bullet:
+        bullet_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(acronym_dataset.root_dir, class_type=["Bullet"], split='train',
+                                                                    num_scene_pts=acronym_dataset.num_scene_pts, num_target_pts=acronym_dataset.num_target_pts)
+        bullet_dataloader = DataLoader(bullet_dataset, batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
+        full_loader = [train_dataloader, bullet_dataloader]
+        
+        bullet_val_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(acronym_dataset.root_dir, class_type=["Bullet"], split='test',
+                                                                    num_scene_pts=acronym_dataset.num_scene_pts, num_target_pts=acronym_dataset.num_target_pts)
+        bullet_val_dataloader = DataLoader(bullet_val_dataset, batch_size=1, shuffle=True, num_workers=1)
+        val_dataloaders["bullet"] = bullet_val_dataloader
+    
     with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
         train_losses = []
         for epoch in range(start_epochs, epochs):
-
             # aps = []
             model.train()
             for loader in full_loader:
@@ -213,9 +227,10 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 
                 # evaltion 
                 if val_dataloader is not None:
-                    eval(model, val_dataloader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn,
-                         device=device, writer=writer, epoch=epoch, total_steps=total_steps)
-
+                    for name, val_loader in val_dataloaders.items():
+                        eval(model, val_loader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn, prefix=name,
+                             device=device, writer=writer, epoch=epoch, total_steps=total_steps)
+                    
                     # run bullet_evaluator
                     tmp_dir = os.path.join(model_dir, 'tmp')
                     evaluator = BulletEvaluator(tmp_dir, 64, save_data = run_bullet)   
@@ -241,13 +256,13 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                         print(e)
                     
                     # create & add new bullet dataset
-                    if run_bullet:
-                        complementary_dataset = evaluator.get_dataset([total_steps], list(range(2, 8)),
-                                                                    dataset_args = {"num_scene_pts": acronym_dataset.num_scene_pts, 
-                                                                                        "num_target_pts": acronym_dataset.num_target_pts} )
-                        complementary_dataloader = DataLoader(complementary_dataset, 
-                                                                batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
-                        full_loader = [complementary_dataloader, train_dataloader]
+                    # if run_bullet:
+                    #     complementary_dataset = evaluator.get_dataset([total_steps], list(range(2, 8)),
+                    #                                                 dataset_args = {"num_scene_pts": acronym_dataset.num_scene_pts, 
+                    #                                                                     "num_target_pts": acronym_dataset.num_target_pts} )
+                    #     complementary_dataloader = DataLoader(complementary_dataset, 
+                    #                                             batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
+                    #     full_loader = [complementary_dataloader, train_dataloader]
 
             if max_steps is not None and total_steps==max_steps:
                 break
@@ -462,7 +477,7 @@ def train_ebm(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til
     
 
 @torch.no_grad()
-def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
+def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
             device=torch.device("cuda:0"),  writer=None, epoch = 0, total_steps = 0):
     # sample poses 
     from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
@@ -511,13 +526,9 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
             logprob = -1 * model(poses, final_t).view(-1)                
             label = torch.ones(logprob.shape[0]).to(logprob.device).long()
             label[pos_num:] = 0
-            
-            if model.distribution != 'direct':
-                pred = torch.exp(logprob)
-                preds.append(pred)
-            else:
-                preds.append(logprob)
-                
+            pred = torch.exp(logprob - logprob.max()) if model.distribution == 'direct' \
+                        else torch.exp(logprob)    
+            preds.append(pred)
             labels.append(label)
             
         # TODO Uncomment these lines for visualization. 
@@ -526,7 +537,8 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
         #     summary_fn(model, model_input, gt, val_iter_info, writer, int(total_steps * 1e3) + val_i, 'val_')
         
         for name, value in val_loss.items():
-            val_losses[name].append(value.cpu().numpy())
+            if value is not None:
+                val_losses[name].append(value.cpu().numpy())
             
         val_losses["acc_avg_angular"].append(acc_matches[:, :, 0].mean().item())
         val_losses["acc_avg_translation"].append(acc_matches[:, :, 1].mean().item())
@@ -550,12 +562,29 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
     
     # for direct ("Bolzman"), simply normalize to [0, 1]
     # it will not change the order and affect AP computation
-    if model.distribution == 'direct':
-        preds = (preds - preds.min()) / (preds.max() - preds.min())
-    
     bap.update(preds, labels) 
     bprc.update(preds, labels)
     
+    # plot SR rate over quantile
+    total_pred, total_gt = preds.cpu().numpy(), labels.cpu().numpy()
+    n_bins = 15
+    pred_q = np.linspace(0, 1, n_bins + 1)
+    sr = []
+    for i in range(n_bins):
+        sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
+        
+    ece = np.mean(
+        np.abs( (pred_q[1:] + pred_q[:-1]) / 2 - sr )
+    )
+    
+    quantile_fig = plt.figure()
+    ax = quantile_fig.add_subplot(111)
+    ax.plot(np.arange(n_bins) / n_bins, sr)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Quantile")
+    ax.set_ylabel("SR")
+ 
     mAP = bap.compute().item() # np.array(aps).mean()
     fig_, ax_ = bprc.plot(score=True)
     # save the pr curve stats from bprc
@@ -563,30 +592,35 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
     print(f"Ep {epoch}, Validation mAP: {mAP}")
     stats = {}
     if writer is not None:
-        writer.add_scalar('val_mAP', mAP, total_steps)
-        writer.add_figure('val_precision_recall_curve', fig_, total_steps)
+        writer.add_scalar(f'{prefix}val_mAP', mAP, total_steps)
+        writer.add_scalar(f'{prefix}val_ece', ece, total_steps)
+        writer.add_figure(f'{prefix}val_precision_recall_curve', fig_, total_steps)
+        writer.add_figure(f'{prefix}val_quantile_sr', quantile_fig, total_steps)
     else:
-        stats['val_mAP'] = mAP
+        stats[f'{prefix}val_mAP'] = mAP
+        stats[f'{prefix}val_ece'] = ece
         precision, recall, thresholds = bprc.compute()
         # convert to numpy
         precision, recall, thresholds = precision.cpu().numpy(), recall.cpu().numpy(), thresholds.cpu().numpy()
-        fig_.savefig(os.path.join(logdir, 'precision_recall_curve.png'))
-        np.savez(os.path.join(logdir, 'precision_recall_curve.npz'), precision=precision, recall=recall, thresholds=thresholds)
+        fig_.savefig(os.path.join(logdir, f'{prefix}-precision_recall_curve-{total_steps}.png'))
+        quantile_fig.savefig(os.path.join(logdir, f'{prefix}-quantile_sr-{total_steps}.png'))
+        np.savez(os.path.join(logdir, f'{prefix}-precision_recall_curve-{total_steps}.npz'), 
+                 precision=precision, recall=recall, thresholds=thresholds, quantile_sr = sr)
       
     for loss_name, loss in val_losses.items():
         if loss_name in ['total', 'acc']:
             if loss_name == 'acc':
                 acc_rate = sum(val_losses['acc']) / sum(val_losses['total'])
                 if writer is not None:
-                    writer.add_scalar('val_acc', acc_rate, total_steps)
+                    writer.add_scalar(f'{prefix}val_acc', acc_rate, total_steps)
                 else:
-                    stats['val_acc'] = acc_rate
+                    stats[f'{prefix}val_acc'] = acc_rate
         else:
             single_loss = np.mean(loss)
             if writer is not None:
-                writer.add_scalar('val_' + loss_name, single_loss, total_steps)
+                writer.add_scalar(f'{prefix}val_' + loss_name, single_loss, total_steps)
             else:
-                stats['val_' + loss_name] = single_loss
+                stats[f'{prefix}val_' + loss_name] = single_loss
             
     # compute cp score
     # S <=> 1 - pred ; F <=> pred
@@ -598,11 +632,11 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn,
     cp_score_95 = np.quantile(cp_score, 0.95)
     
     if writer is not None:
-        writer.add_scalar('val_cp_90', cp_score_90, total_steps)
-        writer.add_scalar('val_cp_95', cp_score_95, total_steps)
+        writer.add_scalar(f'{prefix}val_cp_90', cp_score_90, total_steps)
+        writer.add_scalar(f'{prefix}val_cp_95', cp_score_95, total_steps)
     else:
-        stats['val_cp_90'] = cp_score_90
-        stats['val_cp_95'] = cp_score_95
+        stats[f'{prefix}val_cp_90'] = cp_score_90
+        stats[f'{prefix}val_cp_95'] = cp_score_95
     
     import pprint
     pprint.pprint(stats)
