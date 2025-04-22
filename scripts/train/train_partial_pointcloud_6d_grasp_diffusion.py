@@ -1,4 +1,9 @@
 import os
+# set pyglet to headless mode
+if os.environ.get('PYOPENGL_PLATFORM', '') == 'egl':
+    import pyglet
+    pyglet.options['headless'] = True
+    
 import copy
 import configargparse
 from se3dif.utils import get_root_src
@@ -26,6 +31,9 @@ def parse_args():
 
     p.add_argument('--spec_file', type=str, default='multiobject_partialp_graspdif'
                    , help='root for saving logging')
+    
+    p.add_argument('--num_workers', type=int, default=16
+                , help='root for saving logging')
 
     p.add_argument('--summary', type=bool, default=True
                    , help='activate or deactivate summary')
@@ -34,6 +42,9 @@ def parse_args():
                    , help='root for saving logging')
 
     p.add_argument('--models_root', type=str, default=root_dir
+                   , help='root for saving logging')
+    
+    p.add_argument("--data_root", type=str, default=os.path.join(root_dir, 'data')
                    , help='root for saving logging')
 
     p.add_argument('--device',  type=str, default='cuda',)
@@ -66,10 +77,10 @@ def main(opt):
 
     ## Dataset
     train_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'])
-    train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    train_dataloader = DataLoader(train_dataset, num_workers=opt.num_workers, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
     test_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'],
                                                                   test_files=train_dataset.test_grasp_files)
-    test_dataloader = DataLoader(test_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    test_dataloader = DataLoader(test_dataset, num_workers=1, batch_size=1, shuffle=True, drop_last=True)
 
     ## Model
     args['device'] = device
@@ -105,7 +116,7 @@ def main(opt):
                 steps_til_summary=args['TrainSpecs']['steps_til_summary'],
                 epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
                 loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
-                clip_grad=False, val_loss_fn=val_loss_fn, overwrite=True,
+                clip_grad=False, val_loss_fn=val_loss_fn,
                 val_dataloader=test_dataloader)
 
 

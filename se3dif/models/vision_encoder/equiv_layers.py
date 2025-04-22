@@ -26,9 +26,7 @@ def get_graph_feature(x, k=20, idx=None, x_coord=None, device='cpu'):
             idx = knn(x, k=k)
 
     idx_base = torch.arange(0, batch_size, device=device).view(-1, 1, 1) * num_points
-
     idx = idx + idx_base
-
     idx = idx.view(-1)
 
     _, num_dims, _ = x.size()
@@ -46,29 +44,50 @@ def get_graph_feature(x, k=20, idx=None, x_coord=None, device='cpu'):
 
 
 def get_graph_feature_cross(x, k=20, idx=None, device='cpu'):
+    """ Get graph features
+    
+    Args:
+        x: input points of shape [B, 1, N_feat, N_samples]
+        k: number of neighbors
+        idx: indices of neighbors
+        
+    Return:
+        feat: (B, C, 3, N, K)
+    """
     batch_size = x.size(0)
     num_points = x.size(3)
-    x = x.view(batch_size, -1, num_points)
+    pos = x[:, :, :3, :]
+    
+    pos = pos.view(batch_size, -1, num_points) # (B, 3, N_samples)
     if idx is None:
-        idx = knn(x, k=k)  # (batch_size, num_points, k)
+        idx = knn(pos, k=k)  # (batch_size, num_points, k)
 
     idx_base = torch.arange(0, batch_size, device=device).view(-1, 1, 1) * num_points
-
     idx = idx + idx_base
-
     idx = idx.view(-1)
 
-    _, num_dims, _ = x.size()
+    _, num_dims, _ = pos.size()
     num_dims = num_dims // 3
 
-    x = x.transpose(2,
-                    1).contiguous()  # (batch_size, num_points, num_dims)  -> (batch_size*num_points, num_dims) #   batch_size * num_points * k + range(0, batch_size*num_points)
-    feature = x.view(batch_size * num_points, -1)[idx, :]
-    feature = feature.view(batch_size, num_points, k, num_dims, 3)
-    x = x.view(batch_size, num_points, 1, num_dims, 3).repeat(1, 1, k, 1, 1)
-    cross = torch.cross(feature, x, dim=-1)
-
-    feature = torch.cat((feature - x, x, cross), dim=3).permute(0, 3, 4, 1, 2).contiguous()
+    pos = pos.transpose(2, 1).contiguous()  # (B, C, N)  -> (B, N, C) 
+    # batch_size * num_points * k + range(0, batch_size*num_points)
+    feature = pos.view(batch_size * num_points, -1)[idx, :]    
+    feature = feature.view(batch_size, num_points, k, num_dims, 3) # (B, N, K, 1, 3)
+    
+    pos = pos.view(batch_size, num_points, 1, num_dims, 3).repeat(1, 1, k, 1, 1) # (B, N, K, 1, 3)
+    cross = torch.cross(feature, pos, dim=-1)
+    feature = torch.cat((feature - pos, pos, cross), dim=3) # (B, N, K, C, 3)
+    feature = feature.permute(0, 3, 4, 1, 2).contiguous() # (B, C, 3, N, K)
+    
+    if x.shape[2] > 3:
+        extra = x[:, :, 3:, :] # (B, 1, C-3, N_samples)
+        extra = extra.view(batch_size, -1, num_points) # (B, C - 3, N_samples)
+        extra = extra.transpose(2, 1).contiguous()  # (B, C - 3, N)  -> (B, N, C - 3)
+        extra_feature = extra.view(batch_size * num_points, -1)[idx, :]
+        extra_feature = extra_feature.view(batch_size, -1, 1, num_points, k) # (B, C - 3, 1, N, K)
+        extra_feature = extra_feature.repeat(1, 1, 3, 1, 1) # (B, C - 3, 3, N, K)
+        
+        feature = torch.cat((feature, extra_feature), dim=1) # (B, C, 3, N, K)
 
     return feature
 
@@ -82,20 +101,16 @@ def get_graph_mean(x, k=20, idx=None):
     device = torch.device('cuda')
 
     idx_base = torch.arange(0, batch_size, device=device).view(-1, 1, 1) * num_points
-
     idx = idx + idx_base
-
     idx = idx.view(-1)
 
     _, num_dims, _ = x.size()
     num_dims = num_dims // 3
 
-    x = x.transpose(2,
-                    1).contiguous()  # (batch_size, num_points, num_dims)  -> (batch_size*num_points, num_dims) #   batch_size * num_points * k + range(0, batch_size*num_points)
+    x = x.transpose(2, 1).contiguous()  # (batch_size, num_points, num_dims)  -> (batch_size*num_points, num_dims) #   batch_size * num_points * k + range(0, batch_size*num_points)
     feature = x.view(batch_size * num_points, -1)[idx, :]
     feature = feature.view(batch_size, num_points, k, num_dims, 3).mean(2, keepdim=False)
     x = x.view(batch_size, num_points, num_dims, 3)
-
     feature = (feature - x).permute(0, 2, 3, 1).contiguous()
 
     return feature

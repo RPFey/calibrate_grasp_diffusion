@@ -60,7 +60,8 @@ class GraspDiffusionFields(nn.Module):
     ''' Grasp DiffusionFields. SE(3) diffusion model to learn 6D grasp distributions. See
         SE(3)-DiffusionFields: Learning cost functions for joint grasp and motion optimization through diffusion
     '''
-    def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder):
+    def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, 
+                    num_scene_points=-1, distribution="bernoulli"):
         super().__init__()
         ## Register points to map H to points ##
         self.register_buffer('points', points)
@@ -74,25 +75,55 @@ class GraspDiffusionFields(nn.Module):
         self.feature_encoder = feature_encoder
         ## Decoder ##
         self.decoder = decoder
+        self.num_scene_points = num_scene_points
+        self.distribution = distribution
 
-    def set_latent(self, O, batch = 1):
-        self.z = self.vision_encoder(O.squeeze(1))
+    def set_latent(self, O, target_index = None):
+        if self.num_scene_points > 0:
+            O = torch.cat([O, target_index], dim=-1) 
+            
+        self.z = self.vision_encoder(O)
         
-    def forward(self, H, k):
+    def forward(self, H, k=None):
+        """ Predict the energy (Negative Log Probality) of the current samples. """
+        logits = self.get_logits(H, k)
+        
+        if self.distribution == 'bernoulli':
+            e = -1 * torch.log(torch.sigmoid(logits) + 1e-6)
+        elif self.distribution == 'direct':
+            e = logits
+        elif self.distribution == 'dirichlet':
+            alphas = torch.exp(logits) + 1
+            S = alphas.sum(dim=-1)
+            e = -1 * torch.log(alphas[:, 0] / S + 1e-6)
+        elif self.distribution == 'dirichlet_neg':
+            alphas = torch.exp(logits) # + 1
+            S = (alphas + 1).sum(dim=-1)
+            e = -1 * torch.log(alphas[:, 0] / S + 1e-6)
+        else:
+            raise ValueError(f"Unknown distribution {self.distribution}")
+        
+        return e
+    
+    def get_logits(self, H, k):
         ## 1. Represent H with points
         repeat_times = H.shape[0] // self.z.shape[0]
         z_ext = self.z.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, self.z.shape[-1])
         
         p = self.geometry_encoder(H, self.points)
-        k_ext = k.unsqueeze(1).repeat(1, p.shape[1])
+        k_ext = k.unsqueeze(1).repeat(1, p.shape[1]) if k is not None else None
         z_ext = z_ext.unsqueeze(1).repeat(1, p.shape[1], 1)
+        
         ## 2. Get Features
         psi = self.feature_encoder(p, k_ext, z_ext)
+        
         ## 3. Flat and get energy
         psi_flatten = psi.reshape(psi.shape[0], -1)
-        e = self.decoder(psi_flatten)
-        return e
-
+        logits = self.decoder(psi_flatten)
+        
+        return logits
+        
+        
     def compute_sdf(self, x):
         """ Compute SDF from the feature encoder 
         

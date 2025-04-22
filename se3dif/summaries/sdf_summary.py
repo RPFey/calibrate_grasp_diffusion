@@ -20,10 +20,11 @@ def sdf_summary(model, model_input, ground_truth, info, writer, iter, prefix="")
     gt_sdf = ground_truth['sdf'][0,:].squeeze().cpu().numpy()
 
     ## Occupancy Max-Min ##
-    writer.add_scalar(prefix + "out_min", pred_sdf.min(), iter)
-    writer.add_scalar(prefix + "out_max", pred_sdf.max(), iter)
-    writer.add_scalar(prefix + "target_out_min", gt_sdf.min(), iter)
-    writer.add_scalar(prefix + "target_out_max", gt_sdf.max(), iter)
+    if writer is not None:
+        writer.add_scalar(prefix + "out_min", pred_sdf.min(), iter)
+        writer.add_scalar(prefix + "out_max", pred_sdf.max(), iter)
+        writer.add_scalar(prefix + "target_out_min", gt_sdf.min(), iter)
+        writer.add_scalar(prefix + "target_out_max", gt_sdf.max(), iter)
 
     ## Set colors based on good occupancy predictions ##
     input_coords = coords[:1].detach().cpu().numpy()
@@ -39,12 +40,11 @@ def sdf_summary(model, model_input, ground_truth, info, writer, iter, prefix="")
 
         all_colors[:, idxs,...] = color
         return all_colors
+    
     all_colors = set_color(all_colors, h_thrs=0.05, i=0)
     all_colors = set_color(all_colors, l_thrs=0.05, h_thrs=0.1, i=1)
     all_colors = set_color(all_colors, l_thrs=0.1, h_thrs=0.3, i=1, intensity=100)
     all_colors = set_color(all_colors, l_thrs=0.3, h_thrs=0.5, i=2)
-
-
     point_cloud(writer, iter, prefix+'_colorized_sdf', input_coords, colors=all_colors)
 
     thrs = 0.07
@@ -68,6 +68,7 @@ def point_cloud(writer, iter, name, points_xyz, colors=None):
     if colors is None:
        colors = np.zeros_like(points_xyz)
 
-    writer.add_mesh(name, vertices=points_xyz, colors=colors,
-                     config_dict={"material": point_size_config}, global_step=iter)
+    if writer is not None:
+        writer.add_mesh(name, vertices=points_xyz, colors=colors,
+                        config_dict={"material": point_size_config}, global_step=iter)
 

@@ -4,6 +4,7 @@ import time
 
 import numpy as np
 import trimesh
+import open3d as o3d
 
 from scipy.stats import special_ortho_group
 
@@ -17,11 +18,9 @@ import h5py
 from se3dif.utils import get_data_src
 
 from se3dif.utils import to_numpy, to_torch, get_grasps_src
-from mesh_to_sdf.surface_point_cloud import get_scan_view, get_hq_scan_view
-from mesh_to_sdf.scan import ScanPointcloud
-
-
-
+# from mesh_to_sdf.surface_point_cloud import get_scan_view, get_hq_scan_view
+from acronym_tools import create_gripper_marker
+import open3d as o3d
 import os, sys
 
 import logging
@@ -276,17 +275,17 @@ class PointcloudAcronymAndSDFDataset(Dataset):
                                    'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
                  se3=False, phase='train', one_object=False,
                  n_pointcloud = 1000, n_density = 200, n_coords = 1000,
-                 augmented_rotation=True, visualize=False, split = True):
+                 augmented_rotation=True, visualize=False, split = True, data_src = None):
 
-        #class_type = ['Mug']
+        # class_type = ['Mug']
         self.class_type = class_type
-        self.data_dir = get_data_src()
+        self.data_dir = get_data_src() if data_src is None else data_src
 
         self.grasps_dir = os.path.join(self.data_dir, 'grasps')
 
         self.grasp_files = []
         for class_type_i in class_type:
-            cls_grasps_files = sorted(glob.glob(self.grasps_dir+'/'+class_type_i+'/*.h5'))
+            cls_grasps_files = sorted(glob.glob(self.grasps_dir + '/' + class_type_i + '/*.h5'))
 
             for grasp_file in cls_grasps_files:
                 g_obj = AcronymGrasps(grasp_file)
@@ -326,12 +325,25 @@ class PointcloudAcronymAndSDFDataset(Dataset):
         self.type = 'test'
 
     def _get_grasps(self, grasp_obj):
-        try:
-            rix = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density)
-        except:
-            print('lets see')
-        H_grasps = grasp_obj.good_grasps[rix, ...]
-        return H_grasps
+        if self.type == 'test':
+            H_grasps = grasp_obj.good_grasps
+            F_grasps = grasp_obj.bad_grasps 
+        else:
+            if grasp_obj.good_grasps.shape[0] >= self.n_density:
+                gix = np.random.choice(grasp_obj.good_grasps.shape[0], self.n_density, replace=False)
+                H_grasps = grasp_obj.good_grasps[gix, ...]
+            else:
+                gidx = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density - grasp_obj.good_grasps.shape[0])
+                H_grasps = np.concatenate([grasp_obj.good_grasps, grasp_obj.good_grasps[gidx, ...]], axis=0)
+            
+            if grasp_obj.bad_grasps.shape[0] >= self.n_density:
+                gix = np.random.choice(grasp_obj.bad_grasps.shape[0], self.n_density, replace=False)
+                F_grasps = grasp_obj.bad_grasps[gix, ...]
+            else:
+                gidx = np.random.randint(low=0, high=grasp_obj.bad_grasps.shape[0], size=self.n_density - grasp_obj.bad_grasps.shape[0])
+                F_grasps = np.concatenate([grasp_obj.bad_grasps, grasp_obj.bad_grasps[gidx, ...]], axis=0)
+        
+        return H_grasps, F_grasps
 
     def _get_sdf(self, grasp_obj, grasp_file):
 
@@ -375,7 +387,7 @@ class PointcloudAcronymAndSDFDataset(Dataset):
         pcl = self._get_mesh_pcl(grasps_obj)
 
         ## Grasps good/bad
-        H_grasps = self._get_grasps(grasps_obj)
+        H_grasps, F_grasps = self._get_grasps(grasps_obj)
 
         ## rescale, rotate and translate ##
         xyz = xyz*self.scale
@@ -426,6 +438,7 @@ class PointcloudAcronymAndSDFDataset(Dataset):
         res = {'visual_context': torch.from_numpy(pcl).float(),
                'x_sdf': torch.from_numpy(xyz).float(),
                'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'x_neg_ene': torch.from_numpy(F_grasps).float(),
                'scale': torch.Tensor([self.scale]).float()}
 
         return res, {'sdf': torch.from_numpy(sdf).float()}
@@ -433,17 +446,231 @@ class PointcloudAcronymAndSDFDataset(Dataset):
     def __getitem__(self, index):
         'Generates one sample of data'
         return self._get_item(index)
+    
+class PointcloudSceneAcronymAndSDFDataset(Dataset):
+    'DataLoader for training DeepSDF with a Rotation Invariant Encoder model'
+    def __init__(self, root_dir, class_type=['Cup', 'Mug', 'Fork', 'Hat', 'Bottle', 'Bowl', 'Car', 'Donut', 'Laptop', 'MousePad', 'Pencil',
+                                   'Plate', 'ScrewDriver', 'WineBottle','Backpack', 'Bag', 'Banana', 'Battery', 'BeanBag', 'Bear',
+                                   'Book', 'Books', 'Camera','CerealBox', 'Cookie','Hammer', 'Hanger', 'Knife', 'MilkCarton', 'Painting',
+                                   'PillBottle', 'Plant','PowerSocket', 'PowerStrip', 'PS3', 'PSP', 'Ring', 'Scissors', 'Shampoo', 'Shoes',
+                                   'Sheep', 'Shower', 'Sink', 'SoapBottle', 'SodaCan','Spoon', 'Statue', 'Teacup', 'Teapot', 'ToiletPaper',
+                                   'ToyFigure', 'Wallet','WineGlass', 'Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick'],
+                        visualize = False, split = 'train', num_grasps = 128, num_scene_pts = 2048, num_target_pts = 1024, seed = 42):
+        
+        # class_type = ['Cup']
+        self.class_type = class_type
+        self.visualize = visualize
+        self.num_pos = num_grasps
+        self.num_neg = self.num_pos
+        self.num_scene_pts = num_scene_pts
+        self.num_target_pts = num_target_pts
+        self.scale = 8.
+        self.split = split
+        self.root_dir = root_dir
 
+        rng = np.random.RandomState(seed)
+        self.files = []
+        for cls in self.class_type:
+            cls_files = glob.glob(root_dir + '/' + cls + '/*.npz')
+            if len(cls_files) == 0:
+                print('No files found for class:', cls)
+                continue
+            
+            rng.shuffle(cls_files)
+            test_size = int(0.1 * len(cls_files))
+            test_size = max(test_size, 1)
+            train_size = len(cls_files) - test_size
+            if self.split == 'train':
+                self.files = self.files + cls_files[:train_size]
+            elif self.split == 'test':
+                self.files = self.files + cls_files[train_size:]
+                
+    def __len__(self):
+        return len(self.files)
+
+    def _get_item(self, index):
+        ## Load Files ##
+        filename = self.files[index]
+        cls_name = filename.split('/')[-2]
+        data = np.load(filename)
+        scene_pts = data['scene_pts']
+        target_index = data['target_index']
+        
+        try:
+            query_pts = data['xyz']
+            sdf = data['sdf']
+            
+            # sample_sdf
+            if len(query_pts) > self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts)
+                query_pts = query_pts[rix, ...]
+                sdf = sdf[rix]
+            elif len(query_pts) < self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(query_pts), size=self.num_target_pts-len(query_pts))
+                query_pts = np.concatenate([query_pts, query_pts[rix, ...]], axis=0)
+                sdf = np.concatenate([sdf, sdf[rix]], axis=0)
+        except:
+            query_pts, sdf = np.zeros((1, 3)), np.zeros((1, ))
+    
+        # sample points to num_scene_pts and num_target_pts
+        target_pts = scene_pts[target_index > 0, :]
+        surr_pts = scene_pts[target_index == 0, :]
+        
+        if self.split == 'train':
+            if len(target_pts) > self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts)
+                target_pts = target_pts[rix, ...]
+            elif len(target_pts) < self.num_target_pts:
+                rix = np.random.randint(low=0, high=len(target_pts), size=self.num_target_pts-len(target_pts))
+                target_pts = np.concatenate([target_pts, target_pts[rix, ...]], axis=0)
+        else:
+            target_pts = PointcloudSceneAcronymAndSDFDataset.fps_sample(target_pts, self.num_target_pts)
+                
+        if self.num_scene_pts > 0:
+            if self.split == 'train':
+                if len(surr_pts) > self.num_scene_pts:
+                    rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts)
+                    surr_pts = surr_pts[rix, ...]
+                elif len(surr_pts) < self.num_scene_pts:
+                    rix = np.random.randint(low=0, high=len(surr_pts), size=self.num_scene_pts-len(surr_pts))
+                    surr_pts = np.concatenate([surr_pts, surr_pts[rix, ...]], axis=0)
+            else:
+                surr_pts = PointcloudSceneAcronymAndSDFDataset.fps_sample(surr_pts, self.num_scene_pts)
+            pcl = np.concatenate([surr_pts, target_pts], axis=0)
+        else:
+            pcl = target_pts
+        
+        # sample grasps to num_grasps
+        H_grasps = data['grasps']
+        F_grasps = data['F_grasps']
+        
+        # downsample grasps for training 
+        if self.split == 'train': 
+            valid_H_grasps = np.ones((self.num_pos, ))
+            if len(H_grasps) > self.num_pos:
+                # draw without replacement
+                rix = np.random.choice(len(H_grasps), size=self.num_pos, replace=False)
+                H_grasps = H_grasps[rix, ...]
+            elif len(H_grasps) < self.num_pos:
+                rix = np.random.randint(low=0, high=len(H_grasps), size=self.num_pos - len(H_grasps))
+                H_grasps = np.concatenate([H_grasps, H_grasps[rix, ...]], axis=0)
+                valid_H_grasps[len(H_grasps):] = 0
+
+            if len(F_grasps) > self.num_neg:
+                # draw without replacement
+                rix = np.random.choice(len(F_grasps), size=self.num_neg, replace=False)
+                F_grasps = F_grasps[rix, ...]
+            elif len(F_grasps) < self.num_neg:
+                rix = np.random.randint(low=0, high=len(F_grasps), size=self.num_neg - len(F_grasps))
+                F_grasps = np.concatenate([F_grasps, F_grasps[rix, ...]], axis=0)
+        else:
+            valid_H_grasps = np.ones((H_grasps.shape[0], ))
+        
+        #######################
+        
+        # concatenate target index
+        target_index = np.zeros((len(pcl), 1))
+        target_index[-self.num_target_pts:, :] = 1
+        
+        # centralize
+        mean = np.mean(target_pts, 0)
+        pcl -= mean
+        H_grasps[:, :3, -1] -= mean
+        F_grasps[:, :3, -1] -= mean
+        query_pts -= mean
+        
+        ## Random rotation Augmentation ##
+        if self.split == 'train':
+            R = special_ortho_group.rvs(3)
+            H = np.eye(4)
+            H[:3, :3] = R
+            ## rotate ##
+            pcl = np.einsum('mn,bn->bm', R, pcl)
+            query_pts = np.einsum('mn,bn->bm', R, query_pts)
+            H_grasps = np.einsum('mn,bnk->bmk', H, H_grasps)
+            F_grasps = np.einsum('mn,bnk->bmk', H, F_grasps)
+            
+        else:
+            # random perturb the target index
+            perturb_index = self.num_scene_pts + np.random.choice(self.num_target_pts, size=(32,), replace=False)
+            target_index[perturb_index, 0] = 1 - target_index[perturb_index, 0]
+
+        # Visualize
+        if self.visualize:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(pcl)
+            colors = np.zeros((len(pcl), 3))
+            colors[target_index[:, 0] == 1, 2] = 1
+            colors[target_index[:, 0] == 0, 0] = 1
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+
+            grasps = []
+            for grasp in H_grasps[:5]:
+                g = create_gripper_marker()
+                g.apply_transform(grasp)
+                m = o3d.geometry.TriangleMesh()
+                m.vertices = o3d.utility.Vector3dVector(g.vertices)
+                m.triangles = o3d.utility.Vector3iVector(g.faces)
+                m.paint_uniform_color([0, 1, 0])
+                grasps.append(m)
+                
+            for grasp in F_grasps[:5]:
+                g = create_gripper_marker()
+                g.apply_transform(grasp)
+                m = o3d.geometry.TriangleMesh()
+                m.vertices = o3d.utility.Vector3dVector(g.vertices)
+                m.triangles = o3d.utility.Vector3iVector(g.faces)
+                m.paint_uniform_color([1, 0, 0])
+                grasps.append(m)
+
+            o3d.visualization.draw_geometries([pcd, *grasps])
+            
+        # do scaling here
+        pcl = pcl * self.scale
+        query_pts = query_pts * self.scale
+        sdf = sdf * self.scale
+        H_grasps[..., :3, -1] = H_grasps[..., :3, -1] * self.scale
+        F_grasps[..., :3, -1] = F_grasps[..., :3, -1] * self.scale
+        
+        # shape 
+        # visual context - (N, 3); N = 1000 in original format
+        # x_sdf - (M, 3); M = 1000
+        # x_ene_pos - (K, 4, 4); K = 200
+        # scale - (1)
+        
+        res = {'visual_context': torch.from_numpy(pcl).float(),
+               'x_sdf': torch.from_numpy(query_pts).float(),
+               'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'valid_ene_pos': torch.from_numpy(valid_H_grasps).float(),
+               'x_neg_ene': torch.from_numpy(F_grasps).float(),
+               'target_index': torch.from_numpy(target_index).float(),
+               'scale': torch.Tensor([self.scale]).float()}
+
+        return res, {'sdf': torch.from_numpy(sdf).float()}
+
+    @staticmethod
+    def fps_sample(pts, num_sample):
+        if len(pts) <= num_sample:
+            return pts
+        else:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(pts)
+            pcd = pcd.farthest_point_down_sample(num_sample)
+            return np.asarray(pcd.points)
+    
+    def __getitem__(self, index):
+        'Generates one sample of data'
+        return self._get_item(index)
 
 class PartialPointcloudAcronymAndSDFDataset(Dataset):
     'DataLoader for training DeepSDF with a Rotation Invariant Encoder model'
     def __init__(self, class_type=['Cup', 'Mug', 'Fork', 'Hat', 'Bottle'],
                  se3=False, phase='train', one_object=False,
                  n_pointcloud = 1000, n_density = 200, n_coords = 1000,
-                 augmented_rotation=True, visualize=False, split = True, test_files=None):
+                 augmented_rotation=True, visualize=False, split = True, test_files=None, data_src = None):
 
         self.class_type = class_type
-        self.data_dir = get_data_src()
+        self.data_dir = get_data_src() if data_src is None else data_src
 
         self.grasps_dir = os.path.join(self.data_dir, 'grasps')
 
@@ -484,9 +711,6 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         self.visualize = visualize
         self.scale = 8.
 
-        ## Sampler
-        self.scan_pointcloud = ScanPointcloud()
-
     def __len__(self):
         return self.len
 
@@ -495,12 +719,25 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         self.type = 'test'
 
     def _get_grasps(self, grasp_obj):
-        try:
-            rix = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density)
-        except:
-            print('lets see')
-        H_grasps = grasp_obj.good_grasps[rix, ...]
-        return H_grasps
+        if self.type == 'test':
+            H_grasps = grasp_obj.good_grasps
+            F_grasps = grasp_obj.bad_grasps 
+        else:
+            if grasp_obj.good_grasps.shape[0] >= self.n_density:
+                gix = np.random.choice(grasp_obj.good_grasps.shape[0], self.n_density, replace=False)
+                H_grasps = grasp_obj.good_grasps[gix, ...]
+            else:
+                gidx = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density - grasp_obj.good_grasps.shape[0])
+                H_grasps = np.concatenate([grasp_obj.good_grasps, grasp_obj.good_grasps[gidx, ...]], axis=0)
+            
+            if grasp_obj.bad_grasps.shape[0] >= self.n_density:
+                gix = np.random.choice(grasp_obj.bad_grasps.shape[0], self.n_density, replace=False)
+                F_grasps = grasp_obj.bad_grasps[gix, ...]
+            else:
+                gidx = np.random.randint(low=0, high=grasp_obj.bad_grasps.shape[0], size=self.n_density - grasp_obj.bad_grasps.shape[0])
+                F_grasps = np.concatenate([grasp_obj.bad_grasps, grasp_obj.bad_grasps[gidx, ...]], axis=0)
+        
+        return H_grasps, F_grasps
 
     def _get_sdf(self, grasp_obj, grasp_file):
 
@@ -532,9 +769,12 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         mesh.apply_transform(H)
         ######################
         #time0 = time.time()
-        P = self.scan_pointcloud.get_hq_scan_view(mesh)
+        # import this locally for multi-process rendering
+        from mesh_to_sdf.scan import ScanPointcloud
+        scan_pointcloud = ScanPointcloud()
+        P = scan_pointcloud.get_hq_scan_view(mesh)
         #print('Sample takes {} s'.format(time.time() - time0))
-        P +=centroid
+        P += centroid
         try:
             rix = np.random.randint(low=0, high=P.shape[0], size=self.n_pointcloud)
         except:
@@ -558,13 +798,14 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         pcl = self._get_mesh_pcl(grasps_obj)
 
         ## Grasps good/bad
-        H_grasps = self._get_grasps(grasps_obj)
+        H_grasps, F_grasps = self._get_grasps(grasps_obj)
 
         ## rescale, rotate and translate ##
         xyz = xyz*self.scale
         sdf = sdf*self.scale
         pcl = pcl*self.scale
-        H_grasps[..., :3, -1] = H_grasps[..., :3, -1]*self.scale
+        H_grasps[..., :3, -1] = H_grasps[..., :3, -1] * self.scale
+        F_grasps[..., :3, -1] = F_grasps[..., :3, -1] * self.scale
         ## Random rotation ##
         R = special_ortho_group.rvs(3)
         H = np.eye(4)
@@ -574,10 +815,12 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         xyz = xyz - mean
         pcl = pcl - mean
         H_grasps[..., :3, -1] = H_grasps[..., :3, -1] - mean
+        F_grasps[..., :3, -1] = F_grasps[..., :3, -1] - mean
         ## rotate ##
         pcl = np.einsum('mn,bn->bm',R, pcl)
         xyz = np.einsum('mn,bn->bm',R, xyz)
         H_grasps = np.einsum('mn,bnk->bmk', H, H_grasps)
+        F_grasps = np.einsum('mn,bnk->bmk', H, F_grasps)
         #######################
 
         # Visualize
@@ -609,6 +852,7 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         res = {'visual_context': torch.from_numpy(pcl).float(),
                'x_sdf': torch.from_numpy(xyz).float(),
                'x_ene_pos': torch.from_numpy(H_grasps).float(),
+               'x_neg_ene': torch.from_numpy(F_grasps).float(),
                'scale': torch.Tensor([self.scale]).float()}
 
         return res, {'sdf': torch.from_numpy(sdf).float()}
@@ -619,16 +863,23 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
 
 
 if __name__ == '__main__':
+    import argparse
+    args = argparse.ArgumentParser()
+    args.add_argument('--data_root', type=str, default="/root/calibrate_grasp_diffusion/data/scene_2048")
+    opt = args.parse_args()
 
-    ## Index conditioned dataset
-    dataset = AcronymAndSDFDataset(visualize=True, augmented_rotation=True, one_object=False)
+    # ## Index conditioned dataset
+    # dataset = AcronymAndSDFDataset(visualize=True, augmented_rotation=True, one_object=False)
 
-    ## Pointcloud conditioned dataset
-    dataset = PointcloudAcronymAndSDFDataset(visualize=True, augmented_rotation=True, one_object=False)
+    # ## Pointcloud conditioned dataset
+    # dataset = PointcloudAcronymAndSDFDataset(visualize=True, augmented_rotation=True, one_object=False)
 
-    ## Pointcloud conditioned dataset
+    # ## Pointcloud conditioned dataset
     dataset = PartialPointcloudAcronymAndSDFDataset(visualize=False, augmented_rotation=True, one_object=False)
 
-    train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
-    for x,y in train_dataloader:
-        print(x)
+    # dataset = PointcloudSceneAcronymAndSDFDataset(root_dir=opt.data_root, visualize=True)
+    # dataset[22]
+
+    # train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
+    # for x,y in train_dataloader:
+    #     print(x)

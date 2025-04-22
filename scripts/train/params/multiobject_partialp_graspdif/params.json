@@ -2,12 +2,14 @@
   "Description" : [ "This experiment trains jointly an SDF model and a SE(3) Grasp Energy" ],
   "exp_log_dir": "multiobject_partial_graspdif",
   "single_object": false,
+  "num_scene_points": -1,
+  "num_target_points": 512,
   "TrainSpecs": {
-    "batch_size": 2,
-    "num_epochs": 90000,
+    "batch_size": 24,
+    "num_epochs": 20000,
     "steps_til_summary": 500,
-    "iters_til_checkpoint": 1000,
-    "epochs_til_checkpoint": 10
+    "iters_til_checkpoint": 5000,
+    "epochs_til_checkpoint": 100
   },
   "NetworkArch" : "PointcloudGraspDiffusion",
   "NetworkSpecs" : {

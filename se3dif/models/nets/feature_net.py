@@ -119,12 +119,15 @@ class TimeLatentFeatureEncoder(nn.Module):
             timesteps (torch.Tensor): input tensor of shape (N, L)
             latent_vecs (torch.Tensor): input tensor of shape (N, latent_size)
         """
-        ## Encode TimeStep
-        t_emb = self.time_embed(timesteps)
         ## Encode Position
         x_emb = self.x_embed(input)
-        xyz = x_emb + t_emb
-
+        ## Encode TimeStep
+        if timesteps is not None:
+            t_emb = self.time_embed(timesteps)
+            xyz = x_emb + t_emb
+        else:
+            xyz = x_emb
+        
         if (latent_vecs is not None):
             latent_vecs = F.dropout(latent_vecs, p=0.2, training=self.training)
             x = torch.cat([latent_vecs, xyz, input], -1)

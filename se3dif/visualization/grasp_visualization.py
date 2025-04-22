@@ -4,7 +4,7 @@ import trimesh
 import io
 from PIL import Image
 from pyglet import gl
-
+import matplotlib.pyplot as plt
 
 
 def create_gripper_marker(color=[0, 0, 255], tube_radius=0.001, sections=6, scale = 1.):
@@ -69,7 +69,6 @@ def visualize_points(model, input):
     ## VISUALIZE GRASP POINTS ##
     with torch.no_grad():
         x, sdf = model.get_points_and_features(input)
-
 
     ## Visualization points ##
     point_clouds = input['point_cloud'].cpu().numpy()
@@ -145,40 +144,45 @@ def visualize_grasps(Hs, scale=1., p_cloud=None, energies=None, colors=None, mes
     else:
         return scene
 
-
 def generate_mesh_grid(xmin=[-1.,-1.,-1.], xmax = [1., 1.,1.], n_points=20):
     x = torch.linspace(xmin[0], xmax[0], n_points)
     y = torch.linspace(xmin[1], xmax[1], n_points)
     z = torch.linspace(xmin[2], xmax[2], n_points)
-
     xx, yy, zz = torch.meshgrid((x,y,z))
-
     xyz = torch.cat((xx.reshape(-1,1), yy.reshape(-1,1), zz.reshape(-1,1),),1)
     return xyz
 
-
-def get_scene_grasps_image(Hs, scale=1., p_cloud=None, energies=None, colors=None, mesh=None):
-
+def get_scene_grasps_image(Hs, scale=1., p_cloud=None, target_index=None, energies=None, colors=None, mesh=None):
+    """
+    Args:
+        Hs: (N, 4, 4) array of gripper poses
+        scale: scale of the gripper
+        p_cloud: point cloud of the scene
+        target_index: index of the target points in the point cloud
+        energies: energy of the grasps 
+            if specified, the color of the grasps will be determined by the energy
+        colors: colors of the grasps
+        mesh: mesh of the scene
+    """
     ## Set color list
-    if colors is None:
-        if energies is None:
-            color = np.zeros(Hs.shape[0])
-        else:
-            min_energy = energies.min()
-            energies -=min_energy
-            color = energies/(np.max(energies)+1e-6)
-
+    if energies is not None:
+        energies = -1 * energies # reverse the energy so that low energy (high likelihood) has brighter color
+        normalize_energy = (energies - energies.min())/(energies.max() - energies.min())
+        # get plasma
+        cmap = plt.get_cmap('plasma')   
+        colors = cmap(normalize_energy)
+            
     ## Grips
     grips = []
     for k in range(Hs.shape[0]):
         H = Hs[k,...]
 
-        if colors is None:
-            c = color[k]
-            c_vis = np.random.rand(3)*255
-            #c_vis = [0, 0, int(c*254)]
+        # select from color
+        if colors is not None:
+            c_vis = colors[k][:3]
+        # random generation
         else:
-            c_vis = list(colors[k,...])
+            c_vis = np.random.rand(3) * 255
 
         grips.append(
             create_gripper_marker(color=c_vis, scale=scale).apply_transform(H)
@@ -186,10 +190,15 @@ def get_scene_grasps_image(Hs, scale=1., p_cloud=None, energies=None, colors=Non
 
     ## Visualize grips and the object
     if mesh is not None:
-        scene = trimesh.Scene([mesh]+ grips)
+        scene = trimesh.Scene([mesh] + grips)
     elif p_cloud is not None:
-        c = np.ones((p_cloud.shape[0],4))
-        c[:,0] = np.zeros(p_cloud.shape[0])
+        c = np.ones((p_cloud.shape[0], 4))
+        if target_index is not None:
+            c[target_index > 0, 1:3] = 0
+            c[target_index == 0, :2] = 0
+        else:
+            c[:, 0] = 1
+        
         p_cloud_tri = trimesh.points.PointCloud(p_cloud, colors=c)
         scene = trimesh.Scene([p_cloud_tri]+ grips)
     else:

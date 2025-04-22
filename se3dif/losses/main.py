@@ -1,6 +1,5 @@
-from .denoising_loss import ProjectedSE3DenoisingLoss, SE3DenoisingLoss
-from .sdf_loss import SDFLoss
-
+from .denoising_loss import *
+from .sdf_loss import SDFLoss, CELoss, DirichletLoss, APLoss, DirichletAPLoss, EBMLoss
 
 def get_losses(args):
     losses = args['Losses']
@@ -10,8 +9,22 @@ def get_losses(args):
         loss_fns['sdf'] = SDFLoss()
     if 'projected_denoising_loss' in losses:
         loss_fns['denoise'] = ProjectedSE3DenoisingLoss()
+    if 'projected_neg_denoising_l1loss' in losses:
+        loss_fns['neg_denoise'] = ProjectedNegSE3DenoisingLoss()
+    if 'projected_neg_dirichlet_denoising_l1loss' in losses:
+        loss_fns['neg_denoise'] = ProjectedNegDirichletSE3DenoisingLoss()
     if 'denoising_loss' in losses:
         loss_fns['denoise'] = SE3DenoisingLoss()
+    if 'celoss' in losses:
+        loss_fns['ce'] = CELoss()
+    if 'dirichlet' in losses:
+        loss_fns['dirichlet'] = DirichletLoss()
+    if 'aploss' in losses:
+        loss_fns['aploss'] = APLoss()
+    if 'dirichlet_aploss' in losses:
+        loss_fns['dirichlet_aploss'] = DirichletAPLoss(**losses['dirichlet_aploss'])
+    if 'ebm_loss' in losses:
+        loss_fns['ebm'] = EBMLoss()
 
     loss_dict = LossDictionary(loss_dict=loss_fns)
     return loss_dict
@@ -29,11 +42,15 @@ class LossDictionary():
         
         # set the visual context for the model
         c = model_input['visual_context']
-        model.set_latent(c)
+        target_index = model_input.get('target_index', None)    
+        model.set_latent(c, target_index=target_index)
         
         for field in self.fields:
             loss_fn_k = self.loss_dict[field]
             loss, info = loss_fn_k(model, model_input, ground_truth, val)
+            if loss is None:
+                print(f"{field} Loss is None, Skip")
+                continue
             losses = {**losses, **loss}
             infos = {**infos, **info}
 

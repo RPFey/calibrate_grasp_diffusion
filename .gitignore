@@ -1,9 +1,11 @@
 data/
+data
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+*.png
 
 # C extensions
 *.so
@@ -152,3 +154,4 @@ dmypy.json
 
 **no_add/
 gifs/
+logs
