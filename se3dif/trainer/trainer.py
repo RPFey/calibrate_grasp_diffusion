@@ -113,6 +113,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                                                     num_scene_pts=acronym_dataset.num_scene_pts, num_target_pts=acronym_dataset.num_target_pts)
         bullet_dataloader = DataLoader(bullet_dataset, batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
         full_loader = [train_dataloader, bullet_dataloader]
+        # update the start epoch
+        start_epochs = total_steps // ( len(train_dataloader) + len(bullet_dataloader) )
         
         bullet_val_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(acronym_dataset.root_dir, class_type=["Bullet"], split='test',
                                                                     num_scene_pts=acronym_dataset.num_scene_pts, num_target_pts=acronym_dataset.num_target_pts)
@@ -244,7 +246,10 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                             for s in random_seeds:
                                 total, success = evaluator.evaluate_model(model, total_steps, n, s)
                                 totals += len(total)
-                                successes += sum(np.array(success) > 0).item()
+                                total_success = sum(np.array(success) > 0)
+                                if not isinstance(total_success, int):
+                                    total_success = total_success.item()
+                                successes += total_success
                                 
                             success_ratio = successes / totals
                             writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
@@ -522,12 +527,15 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
             pos_num = p_pose.shape[0]
             
             poses = torch.cat((p_pose, f_pose), dim=0)
-            final_t = torch.ones((poses.shape[0], )).to(poses.device) * (1 / generator.T)
+            final_t = torch.ones((poses.shape[0], )).to(poses.device) * model.final_t
             logprob = -1 * model(poses, final_t).view(-1)                
             label = torch.ones(logprob.shape[0]).to(logprob.device).long()
             label[pos_num:] = 0
-            pred = torch.exp(logprob - logprob.max()) if model.distribution == 'direct' \
-                        else torch.exp(logprob)    
+
+            pred =  torch.exp(logprob - logprob.max()) \
+                        if model.distribution == 'direct' \
+                            else torch.exp(logprob)    
+                            
             preds.append(pred)
             labels.append(label)
             
@@ -569,13 +577,25 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
     total_pred, total_gt = preds.cpu().numpy(), labels.cpu().numpy()
     n_bins = 15
     pred_q = np.linspace(0, 1, n_bins + 1)
+    cnts = []
+    conf = []
     sr = []
     for i in range(n_bins):
-        sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
-        
-    ece = np.mean(
-        np.abs( (pred_q[1:] + pred_q[:-1]) / 2 - sr )
-    )
+        quant_index = (total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])
+        cnt = np.sum(quant_index)
+        cnts.append(cnt)
+        if cnt == 0:
+            # if no samples in this bin, set sr to 0
+            sr.append(0)
+            conf.append(0)
+        else:
+            sr.append(np.mean(total_gt[quant_index]))
+            conf.append(np.mean(total_pred[quant_index]))
+    
+    sr, cnts, conf = np.array(sr), np.array(cnts), np.array(conf)
+    weight = cnts / np.sum(cnts)
+    error = np.abs( conf - sr )
+    ece = np.sum(weight * error)
     
     quantile_fig = plt.figure()
     ax = quantile_fig.add_subplot(111)

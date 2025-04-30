@@ -7,14 +7,16 @@ import theseus as th
 from theseus import SO3
 
 class ProjectedSE3DenoisingLoss():
-    def __init__(self, field='denoise', delta = 1., grad=False):
+    def __init__(self, field='denoise', delta = 1., 
+                    grad=False, sigma=0.5):
         self.field = field
         self.delta = delta
         self.grad = grad
+        self.sigma = sigma
 
     # TODO check sigma value
-    def marginal_prob_std(self, t, sigma=0.5):
-        return torch.sqrt((sigma ** (2 * t) - 1.) / (2. * np.log(sigma)))
+    def marginal_prob_std(self, t):
+        return torch.sqrt((self.sigma ** (2 * t) - 1.) / (2. * np.log(self.sigma)))
 
     def __call__(self, model, model_input, ground_truth, val=False, eps=1e-5):
 
@@ -85,14 +87,16 @@ class ProjectedNegSE3DenoisingLoss():
             We imagine those negative samples are sampled and supervise gradient on those negative samples
     
     """
-    def __init__(self, field='neg_denoise', delta = 1., grad=False):
+    def __init__(self, field='neg_denoise', delta = 1., 
+                 grad=False, sigma=0.5):
         self.field = field
         self.delta = delta
         self.grad = grad
+        self.sigma = sigma
 
     # TODO check sigma value
-    def marginal_prob_std(self, t, sigma=0.5):
-        return torch.sqrt((sigma ** (2 * t) - 1.) / (2. * np.log(sigma)))
+    def marginal_prob_std(self, t):
+        return torch.sqrt((self.sigma ** (2 * t) - 1.) / (2. * np.log(self.sigma)))
 
     def __call__(self, model, model_input, ground_truth, val=False, eps=1e-5):
 
@@ -161,14 +165,17 @@ class ProjectedNegDirichletSE3DenoisingLoss():
             Here, we compute both the positive & negative SM Loss
     
     """
-    def __init__(self, field='neg_dirichlet_denoise', delta = 1., grad=False):
+    def __init__(self, field='neg_dirichlet_denoise', 
+                 delta = 1., grad=False, sigma=0.5, weight=0.1):
         self.field = field
         self.delta = delta
         self.grad = grad
+        self.sigma = sigma
+        self.weight = weight
 
     # TODO check sigma value
-    def marginal_prob_std(self, t, sigma=0.5):
-        return torch.sqrt((sigma ** (2 * t) - 1.) / (2. * np.log(sigma)))
+    def marginal_prob_std(self, t):
+        return torch.sqrt((self.sigma ** (2 * t) - 1.) / (2. * np.log(self.sigma)))
     
     def compute_sm_loss(self, model, model_input, name='pos'):
         ## Set input ##
@@ -196,7 +203,7 @@ class ProjectedNegDirichletSE3DenoisingLoss():
             
             # Take the false energy
             logits = model.get_logits(perturbed_H, random_t)
-            alphas = torch.exp(logits)
+            alphas = model.alpha_fn(logits)
             S = (alphas + 1).sum(dim=-1)
             energy = -1 * torch.log(alphas[:, 0] / S + 1e-6) if name == 'pos' else \
                             -1 * torch.log(alphas[:, 1] / S + 1e-6)
@@ -207,7 +214,7 @@ class ProjectedNegDirichletSE3DenoisingLoss():
         # Compute L1 loss
         z_target = z / std[..., None]
         loss_fn = nn.L1Loss()
-        loss = loss_fn(grad_energy, z_target) / 10.
+        loss = loss_fn(grad_energy, z_target) * self.weight # / 10.
         
         return loss
 

@@ -1,12 +1,12 @@
 {
   "Description" : [ "This experiment trains jointly an SDF model and a SE(3) Grasp Energy" ],
-  "exp_log_dir": "multiobject_scene_graspdif_dirichlet_ap_inverse",
+  "exp_log_dir": "multiobject_scene_graspdif_dirichlet_ap_denoise_dual_unnorm_reg005",
   "single_object": false,
-  "distribution": "dirichlet",
+  "distribution": "dirichlet_neg",
   "num_scene_points": 512,
   "num_target_points": 512,
   "TrainSpecs": {
-    "batch_size": 24,
+    "batch_size": 16,
     "num_epochs": 20000,
     "steps_til_summary": 500,
     "iters_til_checkpoint": 5000,
@@ -63,9 +63,11 @@
   "Losses": 
   {
     "sdf_loss": {},
-    "projected_denoising_loss": {},
+    "projected_neg_dirichlet_denoising_l1loss": {},
     "dirichlet_aploss": {
-      "mode": "inverse"
+      "mode": "dual",
+      "mll": "unnormalized",
+      "reg": 0.005
     }
   }
 }

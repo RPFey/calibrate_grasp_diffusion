@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torch.nn as nn
+import math
 
 class GaussianFourierProjection(nn.Module):
     """Gaussian random features for encoding time steps."""
@@ -55,13 +56,13 @@ class NaiveSE3DiffusionModel(nn.Module):
         v = self.network(z_in)
         return v/(std[:,None].pow(2))
 
-
 class GraspDiffusionFields(nn.Module):
     ''' Grasp DiffusionFields. SE(3) diffusion model to learn 6D grasp distributions. See
         SE(3)-DiffusionFields: Learning cost functions for joint grasp and motion optimization through diffusion
     '''
     def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, 
-                    num_scene_points=-1, distribution="bernoulli"):
+                    num_scene_points=-1, distribution="bernoulli", 
+                    alpha_activation='exp', dirichlet_scale=1):
         super().__init__()
         ## Register points to map H to points ##
         self.register_buffer('points', points)
@@ -77,6 +78,21 @@ class GraspDiffusionFields(nn.Module):
         self.decoder = decoder
         self.num_scene_points = num_scene_points
         self.distribution = distribution
+        self.final_t = 1e-3
+        
+        self.dirichlet_scale = dirichlet_scale
+        if alpha_activation == 'exp':
+            self.alpha_fn = lambda x: torch.exp(x) / self.dirichlet_scale
+        elif alpha_activation == 'softplus':
+            self.alpha_fn = lambda x: torch.nn.functional.softplus(x, beta=self.dirichlet_scale) 
+        elif alpha_activation == 'selu':
+            assert self.dirichlet_scale >= 1, "dirichlet_scale should be >= 1 for selu activation"
+            thresh = math.log(self.dirichlet_scale)
+            bias = 1 - thresh
+            self.alpha_fn = lambda x: torch.where(
+                    x > thresh, 
+                    x + bias, 
+                    torch.exp(x) / self.dirichlet_scale )
 
     def set_latent(self, O, target_index = None):
         if self.num_scene_points > 0:
@@ -93,11 +109,11 @@ class GraspDiffusionFields(nn.Module):
         elif self.distribution == 'direct':
             e = logits
         elif self.distribution == 'dirichlet':
-            alphas = torch.exp(logits) + 1
+            alphas = self.alpha_fn(logits) + 1
             S = alphas.sum(dim=-1)
             e = -1 * torch.log(alphas[:, 0] / S + 1e-6)
         elif self.distribution == 'dirichlet_neg':
-            alphas = torch.exp(logits) # + 1
+            alphas = self.alpha_fn(logits) # + 1
             S = (alphas + 1).sum(dim=-1)
             e = -1 * torch.log(alphas[:, 0] / S + 1e-6)
         else:

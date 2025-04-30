@@ -129,7 +129,7 @@ class Grasp_AnnealedLD():
         if self.enable_time:
             ## Phase
             noise_std = .5
-            eps = 1e-3
+            eps = self.model.final_t # 1e-3
             phase = ((self.T - t) / (self.T)) + eps
             sigma_T = self._marginal_prob_std(eps)
 
@@ -140,7 +140,7 @@ class Grasp_AnnealedLD():
             c_lr = alpha * ratio
             
         if noise_off:
-            c_lr = 0.003
+            c_lr = 0.003 if self.enable_time else 0.05
 
         H1 = H0
         for k in range(self.k_steps):
@@ -200,8 +200,8 @@ class Grasp_AnnealedLD():
 
         # compute final score 
         with torch.no_grad():
-            eps = 1e-3
-            t_in = ((1 / self.T) + eps) * torch.ones_like(Ht[:, 0, 0]) \
+            # eps = 1e-3
+            t_in = self.model.final_t * torch.ones_like(Ht[:, 0, 0]) \
                         if self.enable_time else None
             energy = self.model(Ht, t_in) 
             

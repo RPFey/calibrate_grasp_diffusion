@@ -8,11 +8,14 @@ def get_losses(args):
     if 'sdf_loss' in losses:
         loss_fns['sdf'] = SDFLoss()
     if 'projected_denoising_loss' in losses:
-        loss_fns['denoise'] = ProjectedSE3DenoisingLoss()
+        loss_fns['denoise'] = ProjectedSE3DenoisingLoss(
+            **losses['projected_denoising_loss'])
     if 'projected_neg_denoising_l1loss' in losses:
-        loss_fns['neg_denoise'] = ProjectedNegSE3DenoisingLoss()
+        loss_fns['neg_denoise'] = ProjectedNegSE3DenoisingLoss(
+            **losses['projected_neg_denoising_l1loss'])
     if 'projected_neg_dirichlet_denoising_l1loss' in losses:
-        loss_fns['neg_denoise'] = ProjectedNegDirichletSE3DenoisingLoss()
+        loss_fns['neg_denoise'] = ProjectedNegDirichletSE3DenoisingLoss(
+            **losses['projected_neg_dirichlet_denoising_l1loss'])
     if 'denoising_loss' in losses:
         loss_fns['denoise'] = SE3DenoisingLoss()
     if 'celoss' in losses:
