@@ -133,13 +133,23 @@ def main(opt):
                     clip_grad=False, val_loss_fn=val_loss_fn, run_bullet=opt.bullet,
                     val_dataloader=test_dataloader)
     else:
+        val_dataloaders = {"acronym": test_dataloader}
+    
+        # create & add new bullet dataset
+        if opt.bullet:
+            bullet_val_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(train_dataset.root_dir, class_type=["Bullet"], split='test',
+                                                                        num_scene_pts=train_dataset.num_scene_pts, num_target_pts=train_dataset.num_target_pts)
+            bullet_val_dataloader = DataLoader(bullet_val_dataset, batch_size=1, shuffle=True, num_workers=1)
+            val_dataloaders["bullet"] = bullet_val_dataloader
+        
         if opt.eval_ckpt is not None:            
             states = torch.load(opt.eval_ckpt, map_location=device)
             model.load_state_dict(states['model_state'], strict=True)
             total_steps = states['steps']   
             start_epochs = total_steps // len(train_dataloader)
-            trainer.eval(model=model, val_dataloader=test_dataloader, logdir=exp_dir, summary_fn=summary,
-                            loss_fn=loss_fn, device=device, epoch = start_epochs, total_steps = total_steps)
+            for name, data_loader in val_dataloaders.items():
+                trainer.eval(model=model, val_dataloader=data_loader, logdir=exp_dir, summary_fn=summary, prefix=name,
+                                loss_fn=loss_fn, device=device, epoch = start_epochs, total_steps = total_steps)
 
         else:
             checkpoints_dir = os.path.join(exp_dir, 'checkpoints')
@@ -153,9 +163,10 @@ def main(opt):
                 total_steps = states['steps']   
                 start_epochs = total_steps // len(train_dataloader)
 
-                trainer.eval(model=model, val_dataloader=test_dataloader, loss_fn=loss_fn, logdir=exp_dir, summary_fn=summary,
-                                 device=device, writer=writer, epoch = start_epochs, total_steps = total_steps)
-
+                for name, data_loader in val_dataloaders.items():
+                    trainer.eval(model=model, val_dataloader=data_loader, logdir=exp_dir, summary_fn=summary, prefix=name,
+                                loss_fn=loss_fn, device=device, epoch = start_epochs, total_steps = total_steps)
+                    
 if __name__ == '__main__':
     args = parse_args()
     main(args)

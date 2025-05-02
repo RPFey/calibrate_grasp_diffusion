@@ -8,6 +8,7 @@ import glob
 from torch.utils.data import Dataset, DataLoader
 import multiprocessing as mp
 from multiprocessing import Process, Pipe, Queue
+from sklearn.metrics import average_precision_score
 import time
 
 import theseus as th
@@ -87,6 +88,7 @@ def evaluate_grasps(num_object, seed, child_conn, queue, save_dir):
             
             # save results
             if save_dir is not None and np.any(results > 0):
+                # convert from bullet to se3diff coordinate
                 grasp_poses[:, :3, 3] -= 0.04 * grasp_poses[:, :3, 2]
                 orientation = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
                 grasp_poses = grasp_poses @ np.linalg.inv(orientation)[None, :, :]
@@ -207,6 +209,10 @@ class BulletEvaluator:
                     scene_pcd += o3d.geometry.PointCloud.create_from_depth_image(
                         depth_image, intrinsics, extrinsic = Transform.from_list(ext).as_matrix(), depth_scale=1.0, depth_trunc=2.0
                     )
+                    
+                    # down sample to mm scale
+                    target_pcd = target_pcd.voxel_down_sample(voxel_size=0.0005)
+                    scene_pcd = scene_pcd.voxel_down_sample(voxel_size=0.0005)
                 
                 complete_pc, complete_pc_norm, \
                     target_index, target_mean = \
@@ -309,6 +315,7 @@ class BulletEvaluator:
         
         return complete_pc, complete_pc_norm, target_index, target_mean
     
+    @torch.no_grad()
     def _run_model(self, model, pts):
         sampler = Grasp_AnnealedLD(model, batch=self.num_grasps,
                                     T=70, T_fit=50, k_steps=1, 
@@ -323,7 +330,7 @@ class BulletEvaluator:
         all_pts = np.concatenate(all_pts, axis=0)
         seg_ids = np.concatenate(seg_ids, axis=0)
         unique_ids = np.unique(seg_ids)
-        grasps_ids, scores_ids = {}, {}
+        grasps_ids, scores_ids, alphas_ids = {}, {}, {}
         
         for i in unique_ids:
             if i < 2:
@@ -357,9 +364,19 @@ class BulletEvaluator:
             #             else torch.exp(scores)
             if model.distribution == 'direct':
                 # scores = torch.exp(scores)
+                # linear normalization in each scene
                 scores = (scores - scores.min()) / (scores.max() - scores.min())
+                pass
             else:
                 scores = torch.exp(scores)
+                
+            # for dirichlet 
+            if model.distribution[:9] == 'dirichlet':
+                t_in = model.final_t * torch.ones_like(grasp_poses[:, 0, 0])
+                logits = model.get_logits(grasp_poses, t_in)
+                alphas = model.alpha_fn(logits)
+            else:
+                alphas = None
             
             grasp_poses = grasp_poses.cpu().numpy()
             grasp_poses[:, :3, 3] = (grasp_poses[:, :3, 3] / 8) + target_mean
@@ -370,6 +387,8 @@ class BulletEvaluator:
             grasp_poses = grasp_poses @ orientation[None, :, :]
             grasps_ids[i] = grasp_poses
             scores_ids[i] = scores.cpu().numpy()
+            if alphas is not None:
+                alphas_ids[i] = alphas.cpu().numpy()
             
             # for grasp in grasp_poses:
             #     execute_grasp = grasp.copy()
@@ -377,7 +396,7 @@ class BulletEvaluator:
             #     execute_grasp[:3, 3] += 0.04 * execute_grasp[:3, 2]
             #     execute_grasp = execute_grasp @ np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
                         
-        return grasps_ids, scores_ids
+        return grasps_ids, scores_ids, alphas_ids
     
     def run_multiple_process(self, model, num_objects, seeds, num_processes=4):
         """ Run the evaluation in multiple processes """
@@ -403,8 +422,8 @@ class BulletEvaluator:
                     if data[0] == 'input':
                         # run something
                         pts = queues[i].get()
-                        grasps_ids, scores_ids = self._run_model(model, pts)
-                        preds[i] = scores_ids
+                        grasps_ids, scores_ids, alphas_ids = self._run_model(model, pts)
+                        preds[i] = [scores_ids, alphas_ids]
                         
                         # send the point clouds to the child process
                         conn.send(grasps_ids)
@@ -521,6 +540,7 @@ if __name__ == '__main__':
         stats = {}
         total_pred = []
         total_gt = []
+        total_alphas = []
         for exp_id, pair in enumerate(object_seed_pairs):
             n, s = pair
             if exp_id in gts:
@@ -533,43 +553,121 @@ if __name__ == '__main__':
                     stats[n][0] += 1
                     stats[n][1] += 1 if np.any(results > 0) else 0 
                       
-                cates_pred = preds[exp_id]
+                cates_pred, alphas_preds = preds[exp_id]
                 for unique_id in cates_pred:
                     p, g = cates_pred[unique_id], cates_gt[unique_id]
                     total_pred.append(p)
-                    total_gt.append(g)            
+                    total_gt.append(g)     
+                    
+                    if unique_id in alphas_preds:
+                        total_alphas.append(alphas_preds[unique_id])       
 
         for k, v in stats.items():
             print(f"No. objs {k}, total trial {v[0]}, success {v[1]}")
             
         import matplotlib.pyplot as plt
         total_pred = np.concatenate(total_pred, axis=0)
-        total_gt = np.concatenate(total_gt, axis=0)
-        # plt.figure()
-        # plt.scatter(total_gt, total_pred, marker='+')
-        # plt.xlabel("GT")
-        # plt.ylabel("Pred")
-        # plt.savefig("calib.png")
+        # do normalization for all samples
+        # if model.distribution == 'direct':
+        #     total_pred = np.exp(total_pred - total_pred.max())
         
-        # get quantiles 0.5
+        total_gt = np.concatenate(total_gt, axis=0)
+        
+        # get quantiles
         n_bins = 15
-        pred_q = np.linspace(0, 1, n_bins + 1)
+        
+        # One could compute the quantiles for the predicted scores 
+        # and use them to bin the ground truth labels.
+        # The problem is that you cannot gather all the information
+        # So I decided to normalize the scores in each batch
+        # if model.distribution == 'direct':
+        #     quant_q = np.linspace(0, 1, n_bins + 1)
+        #     pred_q = np.quantile(total_pred, quant_q)
+        # else:
+        #     pred_q = np.linspace(0, 1, n_bins + 1)
+            
+        pred_q = np.linspace(0, 1, n_bins + 1)    
+        cnts = []
         sr = []
         for i in range(n_bins):
-            sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
+            quant_index = (total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])
+            cnt = np.sum(quant_index)
+            cnts.append(cnt)
+            if cnt == 0:
+                # if no samples in this bin, set sr to 0
+                sr.append(0)
+            else:
+                sr.append(np.mean(total_gt[quant_index]))
+        
+        sr, cnts = np.array(sr), np.array(cnts)
+        weight = cnts / np.sum(cnts)
+        error = np.abs( (pred_q[1:] + pred_q[:-1]) / 2 - sr )
+        ece = np.sum(weight * error)
+        ap = average_precision_score(total_gt, total_pred)
+        
+        # sr = []
+        # for i in range(n_bins):
+        #     sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
         
         expname = opt.spec_file.split("/")[-1]
         plt.figure()
-        plt.plot(np.arange(n_bins) / n_bins, sr)
+        plt.plot(np.arange(n_bins) / n_bins, sr, label="sr", color='red')
         ax = plt.gca()
+        # bar plot the weight 
+        plt.bar(np.arange(n_bins) / n_bins, weight, alpha=0.2, label='Weight')
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.set_xlabel("Quantile")
         ax.set_ylabel("SR")
+        ax.set_title(f"ECE: {ece:.4f} AP: {ap:.4f}")
+        ax.legend()
         plt.savefig(f"{expname}-{weight_name}-calib.png")
         
         np.savez(f"{expname}-{weight_name}-calib.npz", 
                  xaxis=np.arange(n_bins) / n_bins, yaxis=sr, total_pred=total_pred, total_gt=total_gt)
+        
+        if len(total_alphas) > 0:
+            total_alphas = np.concatenate(total_alphas, axis=0)
+            alphas = (total_alphas + 1)
+            S = alphas.sum(axis=1)
+            uncern = 2 / S
+            pos_pred = alphas[:, 0] / S
+            
+            plt.figure(figsize=(24, 24))
+            plt.scatter(pos_pred[total_gt == 0], uncern[total_gt == 0], marker='x', label='failure', alpha=0.5)
+            plt.scatter(pos_pred[total_gt == 1], uncern[total_gt == 1], marker='+', label='success')
+            ax = plt.gca()
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_xlabel("Pred")
+            ax.set_ylabel("Uncertainty")
+            plt.legend()
+            plt.savefig(f"{expname}-{weight_name}-uncertainty.png")
+            
+            # one can plot ECE vs. Uncertainty Quantile
+            plt.figure()
+            uncern_quantile = np.array([0.2, 0.4, 0.6, 0.8, 1.0])
+            uncern_threshold = np.quantile(uncern, uncern_quantile)
+            for i in range(len(uncern_threshold)):
+                upper = uncern_threshold[i]
+                
+                selected_gt = total_gt[uncern <= upper]
+                selected_pred = total_pred[uncern <= upper]
+                
+                sr = []
+                for k in range(n_bins):
+                    sr.append(np.mean(selected_gt[(selected_pred >= pred_q[k]) & (selected_pred < pred_q[k + 1])]))
+                    
+                plt.plot(np.arange(n_bins) / n_bins, sr, label = f"uncertainty {uncern_quantile[i]}")
+
+            ax = plt.gca()
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_xlabel("Quantile")
+            ax.set_ylabel("SR")
+            plt.legend()
+            plt.savefig(f"{expname}-{weight_name}-uncertainty-calib.png")
+            
             
     else:
         evaluator.evaluate_model(

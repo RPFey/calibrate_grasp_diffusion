@@ -201,6 +201,11 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
     
-    model = models.GraspDiffusionFields(vision_encoder=vision_encoder, feature_encoder=feature_encoder, geometry_encoder=geometry_encoder,
-                                       decoder=energy_net, points=points, num_scene_points=num_scene_points, distribution=distribution).to(device)
+    dirichlet_scale = args.get('dirichlet_scale', 1.0)
+    alpha_activation = args.get('alpha_activation', 'exp')
+    model = models.GraspDiffusionFields(vision_encoder=vision_encoder, feature_encoder=feature_encoder, 
+                                        geometry_encoder=geometry_encoder, decoder=energy_net, points=points, 
+                                        num_scene_points=num_scene_points, distribution=distribution, 
+                                        dirichlet_scale=dirichlet_scale, alpha_activation=alpha_activation)
+    model.to(device)
     return model
