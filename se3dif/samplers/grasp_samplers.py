@@ -140,7 +140,8 @@ class Grasp_AnnealedLD():
             c_lr = alpha * ratio
             
         if noise_off:
-            c_lr = 0.003 if self.enable_time else 0.05
+            phase = eps
+            c_lr = max(0.1 * np.cos( (np.pi / 2) * t / self.T_fit), 1e-3) if self.enable_time else 0.05
 
         H1 = H0
         for k in range(self.k_steps):
@@ -194,7 +195,7 @@ class Grasp_AnnealedLD():
                 trj_H = torch.cat((trj_H, Ht[None,:]), 0)
         
         for t in range(self.T_fit):
-            Ht = self._step(Ht, self.T, noise_off=True)
+            Ht = self._step(Ht, t, noise_off=True)
             if save_path:
                 trj_H = torch.cat((trj_H, Ht[None,:]), 0)
 
