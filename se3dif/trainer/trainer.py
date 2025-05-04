@@ -68,7 +68,8 @@ def compute_difference(grasp_prediction: torch.Tensor, grasp_gt: torch.Tensor) -
 
 def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
           summary_fn=None, iters_til_checkpoint=None, val_dataloader=None, clip_grad=False, val_loss_fn=None,
-          run_bullet=False, optimizers=None, batches_per_validation=10,  rank=0, max_steps=None, device='cpu'):
+          run_bullet=False, optimizers=None, batches_per_validation=10,  rank=0, max_steps=None, device='cpu',
+          generation_step=-1):
 
     if optimizers is None:
         optimizers = [torch.optim.Adam(lr=lr, params=model.parameters())]
@@ -121,6 +122,9 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
         bullet_val_dataloader = DataLoader(bullet_val_dataset, batch_size=1, shuffle=True, num_workers=1)
         val_dataloaders["bullet"] = bullet_val_dataloader
     
+    # The batch argument does not take effect here
+    # generation_step = -1
+    sampler = Grasp_AnnealedLD(model, batch=1, T=generation_step, T_fit=2, k_steps=1, device=device)
     with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
         train_losses = []
         for epoch in range(start_epochs, epochs):
@@ -134,6 +138,33 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     if cm.should_exit():
                         writer.close()
                         cm.requeue()
+                    
+                    # generate poses in current batch
+                    if generation_step > 0:
+                        # # set the current generation step
+                        # curr_iter_gen_step = np.random.randint(10, generation_step + 1)
+                        # sampler.T = curr_iter_gen_step
+
+                        # sampling
+                        forward_start_time = time.time()
+                        # disable grad
+                        model.eval()
+                        for params in model.parameters():  
+                            params.requires_grad = False
+                        
+                        # set the visual context for the model
+                        c = model_input['visual_context']
+                        target_index = model_input.get('target_index', None)    
+                        model.set_latent(c, target_index=target_index)
+                        pose_batch = model_input["x_ene_pos"].shape[0] * model_input["x_ene_pos"].shape[1]
+                        updated_samples, _ = sampler.sample(batch=pose_batch)
+                        model_input["generated_grasps"] = updated_samples.detach().reshape(model_input["x_ene_pos"].shape[0], -1, 4, 4)
+                        
+                        # enable grad
+                        for params in model.parameters():
+                            params.requires_grad = True
+                        model.train()
+                        logging.info("Sampling time: %0.6f" % (time.time() - forward_start_time))
 
                     forward_start_time = time.time()
                     losses, iter_info = loss_fn(model, model_input, gt)
@@ -235,7 +266,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     
                     # run bullet_evaluator
                     tmp_dir = os.path.join(model_dir, 'tmp')
-                    evaluator = BulletEvaluator(tmp_dir, 64, save_data = run_bullet)   
+                    evaluator = BulletEvaluator(tmp_dir, 64, save_data = False)   
                     try:
                         for n in [2, 4, 8]:
                             random_seeds = np.random.choice(int(1e4), (4, ), replace=False)

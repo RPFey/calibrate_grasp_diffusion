@@ -615,6 +615,10 @@ if __name__ == '__main__':
         ax = plt.gca()
         # bar plot the weight 
         plt.bar(np.arange(n_bins) / n_bins, weight, alpha=0.2, label='Weight')
+        # put the weight value on top of the var (2 decimal points)
+        for i in range(n_bins):
+            ax.text(np.arange(n_bins)[i] / n_bins, weight[i] + 0.01, f"{weight[i]:.2f}", ha='center', va='bottom')
+        
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.set_xlabel("Quantile")
@@ -623,8 +627,13 @@ if __name__ == '__main__':
         ax.legend()
         plt.savefig(f"{expname}-{weight_name}-calib.png")
         
-        np.savez(f"{expname}-{weight_name}-calib.npz", 
-                 xaxis=np.arange(n_bins) / n_bins, yaxis=sr, total_pred=total_pred, total_gt=total_gt)
+        if len(total_alphas) > 0:
+            np.savez(f"{expname}-{weight_name}-calib.npz", 
+                    xaxis=np.arange(n_bins) / n_bins, yaxis=sr, 
+                    total_pred=total_pred, total_gt=total_gt, total_alphas=np.concatenate(total_alphas, axis=0))
+        else:
+            np.savez(f"{expname}-{weight_name}-calib.npz", 
+                    xaxis=np.arange(n_bins) / n_bins, yaxis=sr, total_pred=total_pred, total_gt=total_gt)
         
         if len(total_alphas) > 0:
             total_alphas = np.concatenate(total_alphas, axis=0)
@@ -645,9 +654,10 @@ if __name__ == '__main__':
             plt.savefig(f"{expname}-{weight_name}-uncertainty.png")
             
             # one can plot ECE vs. Uncertainty Quantile
-            plt.figure()
+            fig, axes = plt.subplots(1, 2, figsize=(24, 12))
             uncern_quantile = np.array([0.2, 0.4, 0.6, 0.8, 1.0])
             uncern_threshold = np.quantile(uncern, uncern_quantile)
+            ap_uncerns = []
             for i in range(len(uncern_threshold)):
                 upper = uncern_threshold[i]
                 
@@ -658,16 +668,24 @@ if __name__ == '__main__':
                 for k in range(n_bins):
                     sr.append(np.mean(selected_gt[(selected_pred >= pred_q[k]) & (selected_pred < pred_q[k + 1])]))
                     
-                plt.plot(np.arange(n_bins) / n_bins, sr, label = f"uncertainty {uncern_quantile[i]}")
+                axes[0].plot(np.arange(n_bins) / n_bins, sr, label = f"uncertainty {uncern_quantile[i]}")
 
-            ax = plt.gca()
-            ax.set_xlim(0, 1)
-            ax.set_ylim(0, 1)
-            ax.set_xlabel("Quantile")
-            ax.set_ylabel("SR")
-            plt.legend()
-            plt.savefig(f"{expname}-{weight_name}-uncertainty-calib.png")
+                ap = average_precision_score(selected_gt, selected_pred)
+                ap_uncerns.append(ap)
+
+            axes[0].set_xlim(0, 1)
+            axes[0].set_ylim(0, 1)
+            axes[0].set_xlabel("Quantile")
+            axes[0].set_ylabel("SR")
+            axes[0].legend()
             
+            axes[1].plot(uncern_quantile, ap_uncerns, label="AP", color='red')
+            axes[1].set_xlabel("Uncertainty")
+            axes[1].set_ylabel("AP")
+            axes[1].set_xlim(0, 1)
+            axes[1].legend()
+            
+            fig.savefig(f"{expname}-{weight_name}-uncertainty-calib.png")
             
     else:
         evaluator.evaluate_model(
