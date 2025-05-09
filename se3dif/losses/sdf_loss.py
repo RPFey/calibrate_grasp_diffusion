@@ -241,8 +241,13 @@ class DirichletAPLoss():
     def __call__(self, model:models.GraspDiffusionFields, model_input,
                     ground_truth, val=False):
         loss_dict = dict()
-        grasps = torch.cat([model_input["x_ene_pos"], model_input["x_neg_ene"]], dim = 1) # (B, N, 4, 4)
+        if "generated_grasps" not in model_input:
+            grasps = torch.cat([model_input["x_ene_pos"], model_input["x_neg_ene"]], dim = 1) # (B, N, 4, 4)
+        else:
+            grasps = torch.cat([model_input["x_ene_pos"], model_input["generated_grasps"], model_input["x_neg_ene"]], dim = 1) # (B, N, 4, 4)
+        
         pos_num = model_input["x_ene_pos"].shape[1]
+        neg_num = model_input["x_neg_ene"].shape[1]
         batch_size = grasps.shape[0]
         grasps = grasps.view(-1, 4, 4)
 
@@ -268,7 +273,7 @@ class DirichletAPLoss():
             ap = 1 - ap_loss.item()
         elif self.mode == "inverse":
             targets = torch.zeros_like(probPos)
-            targets[:, pos_num:] = 1
+            targets[:, -neg_num:] = 1
             ap_loss = self.ap_impl(probNeg, targets)
             loss_dict["neg_ap"] = ap_loss
             ap = 1 - ap_loss.item()
@@ -278,7 +283,7 @@ class DirichletAPLoss():
             ap_loss_pos = self.ap_impl(probPos, targets_pos)
             
             targets_neg = torch.zeros_like(probPos)
-            targets_neg[:, pos_num:] = 1
+            targets_neg[:, -neg_num:] = 1
             ap_loss_neg = self.ap_impl(probNeg, targets_neg)
             loss_dict["pos_ap"] = ap_loss_pos / 2
             loss_dict["neg_ap"] = ap_loss_neg / 2

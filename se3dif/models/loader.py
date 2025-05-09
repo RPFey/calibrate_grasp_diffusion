@@ -203,9 +203,10 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     
     dirichlet_scale = args.get('dirichlet_scale', 1.0)
     alpha_activation = args.get('alpha_activation', 'exp')
+    learnable_temp = args.get('learnable_temp', False)
     model = models.GraspDiffusionFields(vision_encoder=vision_encoder, feature_encoder=feature_encoder, 
                                         geometry_encoder=geometry_encoder, decoder=energy_net, points=points, 
                                         num_scene_points=num_scene_points, distribution=distribution, 
-                                        dirichlet_scale=dirichlet_scale, alpha_activation=alpha_activation)
+                                        dirichlet_scale=dirichlet_scale, alpha_activation=alpha_activation, learnable_temp = learnable_temp)
     model.to(device)
     return model

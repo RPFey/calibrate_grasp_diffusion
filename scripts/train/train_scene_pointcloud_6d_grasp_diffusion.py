@@ -108,7 +108,7 @@ def main(opt):
 
     ## Optimizer
     lr_schedules = get_learning_rate_schedules(args)
-    optimizer = torch.optim.Adam([
+    param_list = [
             {
                 "params": model.vision_encoder.parameters(),
                 "lr": lr_schedules[0].get_learning_rate(0),
@@ -120,18 +120,25 @@ def main(opt):
             {
                 "params": model.decoder.parameters(),
                 "lr": lr_schedules[2].get_learning_rate(0),
-            },
-        ])
+            }
+    ]
+    if args.get('learnable_temp', True):
+        print("Using learnable temperature !")
+        param_list.append({
+            "params": [model.temperature],
+            "lr": lr_schedules[2].get_learning_rate(0),
+        })
+    
+    optimizer = torch.optim.Adam(param_list)
 
     # Train
+    generation_step = args.get('generation_steps', -1)
     if not opt.eval:
         trainer.train(model=model.float(), train_dataloader=train_dataloader, epochs=args['TrainSpecs']['num_epochs'], model_dir= exp_dir,
                     summary_fn=summary, device=device, lr=1e-4, optimizers=[optimizer],
-                    steps_til_summary=args['TrainSpecs']['steps_til_summary'],
-                    epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
-                    loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
-                    clip_grad=False, val_loss_fn=val_loss_fn, run_bullet=opt.bullet,
-                    val_dataloader=test_dataloader)
+                    steps_til_summary=args['TrainSpecs']['steps_til_summary'], epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
+                    loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'], clip_grad=False, val_loss_fn=val_loss_fn, run_bullet=opt.bullet,
+                    val_dataloader=test_dataloader, generation_step=generation_step)
     else:
         val_dataloaders = {"acronym": test_dataloader}
     
