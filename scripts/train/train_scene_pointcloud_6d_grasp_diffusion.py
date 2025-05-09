@@ -108,7 +108,7 @@ def main(opt):
 
     ## Optimizer
     lr_schedules = get_learning_rate_schedules(args)
-    optimizer = torch.optim.Adam([
+    param_list = [
             {
                 "params": model.vision_encoder.parameters(),
                 "lr": lr_schedules[0].get_learning_rate(0),
@@ -120,8 +120,16 @@ def main(opt):
             {
                 "params": model.decoder.parameters(),
                 "lr": lr_schedules[2].get_learning_rate(0),
-            },
-        ])
+            }
+    ]
+    if args.get('learnable_temp', True):
+        print("Using learnable temperature !")
+        param_list.append({
+            "params": [model.temperature],
+            "lr": lr_schedules[2].get_learning_rate(0),
+        })
+    
+    optimizer = torch.optim.Adam(param_list)
 
     # Train
     generation_step = args.get('generation_steps', -1)

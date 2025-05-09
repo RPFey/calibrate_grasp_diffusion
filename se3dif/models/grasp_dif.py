@@ -62,7 +62,7 @@ class GraspDiffusionFields(nn.Module):
     '''
     def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, 
                     num_scene_points=-1, distribution="bernoulli", 
-                    alpha_activation='exp', dirichlet_scale=1):
+                    alpha_activation='exp', dirichlet_scale=1, learnable_temp=False):
         super().__init__()
         ## Register points to map H to points ##
         self.register_buffer('points', points)
@@ -79,6 +79,11 @@ class GraspDiffusionFields(nn.Module):
         self.num_scene_points = num_scene_points
         self.distribution = distribution
         self.final_t = 1e-3
+        self.temperature = torch.tensor(0.)
+        
+        if learnable_temp:
+            self.temperature = torch.nn.Parameter(torch.tensor(0.0), requires_grad=True)
+            self.register_parameter('temperature', self.temperature)
         
         self.dirichlet_scale = dirichlet_scale
         if alpha_activation == 'exp':
@@ -119,7 +124,7 @@ class GraspDiffusionFields(nn.Module):
         else:
             raise ValueError(f"Unknown distribution {self.distribution}")
         
-        return e
+        return e * torch.exp(self.temperature)
     
     def get_logits(self, H, k):
         ## 1. Represent H with points
