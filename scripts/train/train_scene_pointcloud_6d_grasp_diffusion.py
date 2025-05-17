@@ -9,6 +9,7 @@ if os.environ.get('PYOPENGL_PLATFORM', '') == 'egl':
 import copy
 import configargparse
 from se3dif.utils import get_root_src
+import shutil
 
 import torch
 from torch.utils.data import DataLoader
@@ -21,7 +22,6 @@ from se3dif.trainer.learning_rate_scheduler import get_learning_rate_schedules
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
 root_dir = os.path.abspath(os.path.dirname(__file__ + '/../../../../../'))
-
 
 def parse_args():
     p = configargparse.ArgumentParser()
@@ -68,11 +68,13 @@ def main(opt):
     ## Load training args ##
     spec_file = os.path.join(opt.specs_file_dir, opt.spec_file)
     args = load_experiment_specifications(spec_file)
-
+    
     # saving directories
     root_dir = opt.saving_root
     exp_dir  = os.path.join(root_dir, args['exp_log_dir'])
     args['saving_folder'] = exp_dir
+    os.makedirs(exp_dir, exist_ok=True)
+    shutil.copyfile(os.path.join(spec_file, "params.json"), os.path.join(exp_dir, "params.json"))
 
     if opt.device =='cuda':
         if 'cuda_device' in args:

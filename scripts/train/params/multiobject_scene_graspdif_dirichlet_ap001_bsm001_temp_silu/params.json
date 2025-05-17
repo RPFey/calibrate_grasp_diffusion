@@ -1,15 +1,17 @@
 {
   "Description" : [ "This experiment trains jointly an SDF model and a SE(3) Grasp Energy" ],
-  "exp_log_dir": "multiobject_scene_bernoulli_ce",
+  "exp_log_dir": "multiobject_scene_graspdif_dirichlet_ap001_bsm001_temp_silu",
   "single_object": false,
-  "distribution": "bernoulli",
+  "distribution": "dirichlet_neg",
   "num_scene_points": 512,
   "num_target_points": 512,
+  "learnable_temp": true,
+  "use_silu": true,
   "TrainSpecs": {
-    "batch_size": 24,
+    "batch_size": 16,
     "num_epochs": 20000,
-    "steps_til_summary": 2500,
-    "iters_til_checkpoint": 10000,
+    "steps_til_summary": 500,
+    "iters_til_checkpoint": 5000,
     "epochs_til_checkpoint": 100
   },
   "NetworkArch" : "PointcloudGraspDiffusion",
@@ -60,5 +62,15 @@
       "Interval" : 500,
       "Factor" : 0.5
     }],
-  "Losses": ["sdf_loss", "celoss"]
+  "Losses": 
+  {
+    "sdf_loss": {},
+    "projected_denoising_loss": {
+      "band": 0.01
+    },
+    "dirichlet_aploss": {
+      "weight": 0.01,
+      "band": 0.01
+    }
+  }
 }

@@ -1,12 +1,13 @@
 from .denoising_loss import *
-from .sdf_loss import SDFLoss, CELoss, DirichletLoss, APLoss, DirichletAPLoss, EBMLoss
+from .sdf_loss import *
 
 def get_losses(args):
     losses = args['Losses']
 
     loss_fns = {}
     if 'sdf_loss' in losses:
-        loss_fns['sdf'] = SDFLoss()
+        loss_fns['sdf'] = SDFLoss(
+            **losses['sdf_loss'])
     if 'projected_denoising_loss' in losses:
         loss_fns['denoise'] = ProjectedSE3DenoisingLoss(
             **losses['projected_denoising_loss'])
@@ -18,12 +19,17 @@ def get_losses(args):
             **losses['projected_neg_dirichlet_denoising_l1loss'])
     if 'denoising_loss' in losses:
         loss_fns['denoise'] = SE3DenoisingLoss()
+    if 'ranking_loss' in losses:
+        loss_fns['ranking_loss'] = PairwiseRankingLoss(
+            **losses['ranking_loss'] )
     if 'celoss' in losses:
         loss_fns['ce'] = CELoss()
     if 'dirichlet' in losses:
         loss_fns['dirichlet'] = DirichletLoss()
     if 'aploss' in losses:
-        loss_fns['aploss'] = APLoss()
+        loss_fns['aploss'] = APLoss(
+            **losses['aploss']
+        )
     if 'dirichlet_aploss' in losses:
         loss_fns['dirichlet_aploss'] = DirichletAPLoss(**losses['dirichlet_aploss'])
     if 'ebm_loss' in losses:

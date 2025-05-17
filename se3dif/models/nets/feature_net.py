@@ -39,7 +39,8 @@ class TimeLatentFeatureEncoder(nn.Module):
         xyz_in_all=None,
         use_tanh=False,
         latent_dropout=False,
-        feats_layers = None
+        feats_layers = None,
+        act_module = nn.ReLU
     ):
         super(TimeLatentFeatureEncoder, self).__init__()
 
@@ -57,10 +58,6 @@ class TimeLatentFeatureEncoder(nn.Module):
         self.out_dim = out_dim
         self.latent_size = latent_size
         self.in_dim = in_dim
-
-        def make_sequence():
-            return []
-
         dims = [latent_size + enc_dim + in_dim] + dims + [out_dim]
 
         self.num_layers = len(dims)
@@ -100,7 +97,9 @@ class TimeLatentFeatureEncoder(nn.Module):
         self.use_tanh = use_tanh
         if use_tanh:
             self.tanh = nn.Tanh()
-        self.relu = nn.ReLU()
+        
+        # All ReLUs will be replaced with SiLU
+        self.relu = act_module()
 
         self.dropout_prob = dropout_prob
         self.dropout = dropout

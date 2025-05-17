@@ -61,7 +61,7 @@ class GraspDiffusionFields(nn.Module):
         SE(3)-DiffusionFields: Learning cost functions for joint grasp and motion optimization through diffusion
     '''
     def __init__(self, vision_encoder, geometry_encoder, points, feature_encoder, decoder, 
-                    num_scene_points=-1, distribution="bernoulli", 
+                    num_scene_points=-1, distribution="bernoulli", detach_sdf = False,
                     alpha_activation='exp', dirichlet_scale=1, learnable_temp=False):
         super().__init__()
         ## Register points to map H to points ##
@@ -80,6 +80,7 @@ class GraspDiffusionFields(nn.Module):
         self.distribution = distribution
         self.final_t = 1e-3
         self.temperature = torch.tensor(0.)
+        self.detach_sdf = detach_sdf
         
         if learnable_temp:
             self.temperature = torch.nn.Parameter(torch.tensor(0.0), requires_grad=True)
@@ -138,8 +139,16 @@ class GraspDiffusionFields(nn.Module):
         ## 2. Get Features
         psi = self.feature_encoder(p, k_ext, z_ext)
         
-        ## 3. Flat and get energy
-        psi_flatten = psi.reshape(psi.shape[0], -1)
+        # detach sdf prediction
+        if self.detach_sdf:
+            sdf = psi[..., [0]].detach()
+            feature = psi[..., 1:]
+            psi_flatten = torch.cat([sdf, feature], dim=-1).reshape(psi.shape[0], -1)
+        
+        else:
+            ## 3. Flat and get energy
+            psi_flatten = psi.reshape(psi.shape[0], -1)
+        
         logits = self.decoder(psi_flatten)
         
         return logits
@@ -160,3 +169,5 @@ class GraspDiffusionFields(nn.Module):
         latent_vecs = latent_vecs.unsqueeze(1).repeat(1, repeat_times, 1).reshape(-1, latent_vecs.shape[-1])
         psi = self.feature_encoder(x, k, latent_vecs)
         return psi[..., 0]
+    
+# TODO Decouple the Time Latent and the Anchor Point Embedding

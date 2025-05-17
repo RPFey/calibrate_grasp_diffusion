@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 from se3dif.datasets import AcronymGraspsDirectory
 from se3dif.models.loader import load_model
-from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
+from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD, Grasp_PCSampler
 from se3dif.utils import to_numpy, to_torch, load_experiment_specifications
 from se3dif.visualization import grasp_visualization
 
@@ -148,7 +148,7 @@ class ViserVisualizer:
         model_args['device'] = device
         self.model = load_model(model_args)
         self.model.to(device)
-        self.sampler = Grasp_AnnealedLD(self.model, batch=self.num_grasps, T=30, T_fit=50, device=device)
+        self.sampler = Grasp_PCSampler(self.model, batch=self.num_grasps, T=70, T_fit=30, device=device)
         self.model_weight_handle.value = "/path/to/ckpt"
         print(" Model Constructed ! ")  
     

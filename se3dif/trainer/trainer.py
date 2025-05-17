@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from se3dif import datasets
 from se3dif.utils import makedirs, dict_to_device, ClusterStateManager, SO3_R3
 from se3dif.samplers.bullet_sampler import BulletEvaluator
-from se3dif.samplers import Grasp_AnnealedLD
+from se3dif.samplers import Grasp_AnnealedLD, Grasp_PCSampler
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import BinaryAveragePrecision, BinaryPrecisionRecallCurve
 from tqdm.autonotebook import tqdm
@@ -78,7 +78,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
         assert val_loss_fn is not None, "If validation set is passed, have to pass a validation loss_fn!"
 
     ## Build saving directories
-    makedirs(model_dir)
     summaries_dir = os.path.join(model_dir, 'summaries')
     checkpoints_dir = os.path.join(model_dir, 'checkpoints')
     acronym_dataset = train_dataloader.dataset
@@ -189,7 +188,9 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
                     train_losses.append(train_loss.item())
                     if rank == 0:
-                        writer.add_scalar("total_train_loss", train_loss, total_steps)
+                        writer.add_scalar("total_train_loss", train_loss, total_steps)                     
+                        writer.add_scalar("temp", model.temperature, total_steps)
+
 
                     backward_start_time = time.time()
                     for optim in optimizers:
@@ -544,6 +545,8 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
         H_grasps = model_input["x_ene_pos"] # (B, N, 4, 4)
         num_grasps = H_grasps.shape[1]
         generator = Grasp_AnnealedLD(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=model_input['visual_context'].device)
+        # generator = Grasp_PCSampler(model, batch=num_grasps, T=70, T_fit=50, k_steps=1, device=device, final_stage=True)
+        
         H_sampled = generator.sample()[0] # (B, N, 4, 4)
         H_sampled = H_sampled.unsqueeze(0)
     
@@ -559,7 +562,7 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
             
             poses = torch.cat((p_pose, f_pose), dim=0)
             final_t = torch.ones((poses.shape[0], )).to(poses.device) * model.final_t
-            logprob = -1 * model(poses, final_t).view(-1)                
+            logprob = -1 * model(poses, final_t).view(-1) / torch.exp(model.temperature)              
             label = torch.ones(logprob.shape[0]).to(logprob.device).long()
             label[pos_num:] = 0
 

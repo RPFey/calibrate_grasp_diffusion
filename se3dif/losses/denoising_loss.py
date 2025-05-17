@@ -8,17 +8,20 @@ from theseus import SO3
 
 class ProjectedSE3DenoisingLoss():
     def __init__(self, field='denoise', delta = 1., 
-                    grad=False, sigma=0.5):
+                    grad=False, sigma=0.5, band=1e-5, 
+                    lambda_sigma='constant'):
         self.field = field
         self.delta = delta
         self.grad = grad
         self.sigma = sigma
+        self.band = band
+        self.lambda_sigma = lambda_sigma
 
     # TODO check sigma value
     def marginal_prob_std(self, t):
         return torch.sqrt((self.sigma ** (2 * t) - 1.) / (2. * np.log(self.sigma)))
 
-    def __call__(self, model, model_input, ground_truth, val=False, eps=1e-5):
+    def __call__(self, model, model_input, ground_truth, val=False):
 
         ## Set input ##
         H = model_input['x_ene_pos']
@@ -31,7 +34,7 @@ class ProjectedSE3DenoisingLoss():
         xw = H_th.log_map()
 
         ## 2. Sample perturbed datapoint ##
-        random_t = torch.rand_like(xw[...,0], device=xw.device) * (1. - eps) + eps
+        random_t = torch.rand_like(xw[...,0], device=xw.device) * (1. - self.band) + self.band
         z = torch.randn_like(xw)
         std = self.marginal_prob_std(random_t)
         perturbed_x = xw + z * std[..., None]
@@ -47,8 +50,14 @@ class ProjectedSE3DenoisingLoss():
 
         # Compute L1 loss
         z_target = z / std[..., None]
-        loss_fn = nn.L1Loss()
-        loss = loss_fn(grad_energy, z_target) / 10.
+        if self.lambda_sigma == 'constant':
+            loss_fn = nn.L1Loss()
+            loss = loss_fn(grad_energy, z_target) / 10.
+        elif self.lambda_sigma == 'adaptive':
+            # In Song Yang's paper, https://arxiv.org/pdf/1907.05600
+            # They try to keep the magnitude of the loss for different noise similar.
+            l1_distance = torch.sum(torch.abs(grad_energy - z_target), dim = -1)
+            loss = torch.mean(l1_distance * std) / 10.
         
         info = {self.field: grad_energy}
         
@@ -166,12 +175,15 @@ class ProjectedNegDirichletSE3DenoisingLoss():
     
     """
     def __init__(self, field='neg_dirichlet_denoise', 
-                 delta = 1., grad=False, sigma=0.5, weight=0.1):
+                 delta = 1., grad=False, sigma=0.5, 
+                 weight=0.1, band=1e-5, lambda_sigma='constant'):
         self.field = field
         self.delta = delta
         self.grad = grad
         self.sigma = sigma
         self.weight = weight
+        self.band = band
+        self.lambda_sigma = lambda_sigma
 
     # TODO check sigma value
     def marginal_prob_std(self, t):
@@ -189,8 +201,8 @@ class ProjectedNegDirichletSE3DenoisingLoss():
         xw = H_th.log_map()
 
         ## 2. Sample perturbed datapoint ##
-        eps = 1e-5
-        random_t = torch.rand_like(xw[...,0], device=xw.device) * (1. - eps) + eps
+        # eps = 1e-5
+        random_t = torch.rand_like(xw[...,0], device=xw.device) * (1. - self.band) + self.band
         z = torch.randn_like(xw)
         std = self.marginal_prob_std(random_t)
         perturbed_x = xw + z * std[..., None]
@@ -205,20 +217,26 @@ class ProjectedNegDirichletSE3DenoisingLoss():
             logits = model.get_logits(perturbed_H, random_t)
             alphas = model.alpha_fn(logits)
             S = (alphas + 1).sum(dim=-1)
-            energy = -1 * torch.log(alphas[:, 0] / S + 1e-6) if name == 'pos' else \
-                            -1 * torch.log(alphas[:, 1] / S + 1e-6)
+            energy = -1 * torch.log(alphas[:, 0] / S + 1e-6) * torch.exp(model.temperature) if name == 'pos' else \
+                            -1 * torch.log(alphas[:, 1] / S + 1e-6) * torch.exp(model.temperature)
 
             grad_energy = torch.autograd.grad(energy.sum(), perturbed_x,
                                               only_inputs=True, retain_graph=True, create_graph=True)[0]
 
         # Compute L1 loss
         z_target = z / std[..., None]
-        loss_fn = nn.L1Loss()
-        loss = loss_fn(grad_energy, z_target) * self.weight # / 10.
+        if self.lambda_sigma == 'constant':
+            loss_fn = nn.L1Loss()
+            loss = loss_fn(grad_energy, z_target) * self.weight # / 10.
+        elif self.lambda_sigma == 'adaptive':
+            # In Song Yang's paper, https://arxiv.org/pdf/1907.05600
+            # They try to keep the magnitude of the loss for different noise similar.
+            l1_distance = torch.sum(torch.abs(grad_energy - z_target), dim = -1)
+            loss = torch.mean(l1_distance * std) * self.weight # / 10.
         
         return loss
 
-    def __call__(self, model, model_input, ground_truth, val=False, eps=1e-5):
+    def __call__(self, model, model_input, ground_truth, val=False):
         assert model.distribution == 'dirichlet_neg', "Model should be dirichlet distribution"
         
         loss =( self.compute_sm_loss(model, model_input, name='pos') + \

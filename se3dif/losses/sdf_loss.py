@@ -9,10 +9,11 @@ class SDFLoss():
     """ 
         Compute the L1 SDF Loss, Only compute at the points where the SDF <= self.delta
     """
-    def __init__(self, field='sdf', delta = 0.6, grad=True):
+    def __init__(self, field='sdf', delta = 0.6, grad=True, weight = 1.0):
         self.field = field
         self.delta = delta
         self.grad = grad
+        self.weight = weight
 
     def __call__(self, model:models.GraspDiffusionFields, 
                         model_input, ground_truth, val=False):
@@ -36,17 +37,16 @@ class SDFLoss():
         l_rec = loss(pred_clip_sdf, target_clip_sdf)
 
         ## Total Loss
-        loss_dict[self.field] = l_rec
+        loss_dict[self.field] = l_rec * self.weight
 
         info = {'sdf': sdf}
         return loss_dict, info
 
 
 class CELoss():
-    def __init__(self, field='ce', eps=1e-6, T = 30):
+    def __init__(self, field='ce', band=0.1):
         self.field = field
-        self.eps = eps
-        self.T = T
+        self.band = band
 
     def __call__(self, model:models.GraspDiffusionFields, model_input,
                     ground_truth, val=False):
@@ -56,7 +56,7 @@ class CELoss():
         pos_num = label.shape[0]
         
         labels = torch.cat((label, n_label), dim=0)
-        final_t = torch.rand((labels.shape[0], )).to(labels.device) * (1 - self.eps) + self.eps
+        final_t = torch.rand((labels.shape[0], )).to(labels.device) * self.band
         logits = model.get_logits(labels, final_t).view(-1)
         prob = torch.sigmoid(logits)
         
@@ -79,7 +79,41 @@ class CELoss():
         #     info['ap'] = ap
             
         return loss_dict, info
+    
+class PairwiseRankingLoss():
+    def __init__(self, field='margin', band=0.1, margin=0.1):
+        self.field = field
+        self.band = band
+        self.margin = margin
 
+    def __call__(self, model:models.GraspDiffusionFields, model_input,
+                    ground_truth, val=False):
+        loss_dict = dict()
+        label = model_input["x_ene_pos"].reshape(-1, 4, 4)
+        n_label = model_input["x_neg_ene"].reshape(-1, 4, 4) # 
+        pos_num = label.shape[0]
+        
+        labels = torch.cat((label, n_label), dim=0)
+        final_t = torch.rand((labels.shape[0], )).to(labels.device) * self.band
+        logprob = -1 * model(labels, final_t).view(-1) / model.temperature
+        
+        pos_logprob = logprob[:pos_num]
+        neg_logprob = logprob[pos_num:]
+        
+        pos_logprob = pos_logprob.reshape(-1, 1)  # shape (N, 1)
+        neg_logprob = neg_logprob.reshape(1, -1)  # shape (1, M)
+        
+        # Pairwise differences: set_a[i] - set_b[j]
+        diff = pos_logprob - neg_logprob  # shape (N, M)
+
+        # Loss: max(0, margin - diff)
+        loss = torch.clamp(self.margin - diff, min=0)
+        
+        loss_dict[self.field] = loss.mean()
+        info = {}
+        
+        return loss_dict, info
+        
 class DirichletLoss():
     def __init__(self, field='dirichlet', eps=1e-3):
         self.field = field
@@ -188,13 +222,13 @@ class APLossImpl (nn.Module):
     
     
 class APLoss():
-    def __init__(self, field='ap', time_mode="random",
+    def __init__(self, field='ap', band=0.1,
                     eps=1e-6, weight=1.0):
         self.field = field
         self.eps = eps
         self.ap_impl = APLossImpl()
         self.ap_impl.to(torch.device("cuda:0"))
-        self.time_mode = time_mode
+        self.band = band
         self.weight = weight
 
     def __call__(self, model:models.GraspDiffusionFields, model_input,
@@ -205,13 +239,7 @@ class APLoss():
         batch_size = grasps.shape[0]
         grasps = grasps.view(-1, 4, 4)
 
-        if self.time_mode == 'random':
-            final_t = torch.rand((grasps.shape[0], )).to(grasps.device) * (1. - self.eps) + self.eps
-        elif self.time_mode == 'half':
-            final_t = torch.rand((grasps.shape[0], )).to(grasps.device) * (1. - self.eps) * 0.5 + self.eps
-        else:
-            final_t = torch.ones((grasps.shape[0], )).to(grasps.device) * model.final_t
-        
+        final_t = torch.ones((grasps.shape[0], )).to(grasps.device) * self.band
         logits = model.get_logits(grasps, final_t).view(-1)
         prob = torch.sigmoid(logits)
         prob = prob.reshape(batch_size, -1) # (B, N)
@@ -226,15 +254,16 @@ class APLoss():
     
 class DirichletAPLoss():
     def __init__(self, field='dirichlet_ap', 
-                        mode="direct", eps=1e-6, 
-                        mll='normalize', reg=-1, band=1):
+                        mode="direct", eps=1e-6, weight=1.0,
+                        mll='normalize', reg=-1, band=1, bins=25):
         self.field = field
         self.eps = eps
-        self.ap_impl = APLossImpl()
+        self.ap_impl = APLossImpl(nq=bins)
         self.ap_impl.to(torch.device("cuda:0"))
         self.mode = mode
         self.mll = mll
         self.band = band
+        self.weight = weight
         assert self.eps < self.band <= 1, "Band must be in (eps, 1]"
         self.reg = reg
 
@@ -269,13 +298,13 @@ class DirichletAPLoss():
             targets = torch.zeros_like(probPos)
             targets[:, :pos_num] = 1
             ap_loss = self.ap_impl(probPos, targets)
-            loss_dict["pos_ap"] = ap_loss
+            loss_dict["pos_ap"] = ap_loss * self.weight
             ap = 1 - ap_loss.item()
         elif self.mode == "inverse":
             targets = torch.zeros_like(probPos)
             targets[:, -neg_num:] = 1
             ap_loss = self.ap_impl(probNeg, targets)
-            loss_dict["neg_ap"] = ap_loss
+            loss_dict["neg_ap"] = ap_loss * self.weight
             ap = 1 - ap_loss.item()
         else:
             targets_pos = torch.zeros_like(probPos)
@@ -285,8 +314,8 @@ class DirichletAPLoss():
             targets_neg = torch.zeros_like(probPos)
             targets_neg[:, -neg_num:] = 1
             ap_loss_neg = self.ap_impl(probNeg, targets_neg)
-            loss_dict["pos_ap"] = ap_loss_pos / 2
-            loss_dict["neg_ap"] = ap_loss_neg / 2
+            loss_dict["pos_ap"] = ap_loss_pos / 2 * self.weight
+            loss_dict["neg_ap"] = ap_loss_neg / 2 * self.weight
             ap = 1 - ap_loss_pos.item()
 
         if self.reg > 0:

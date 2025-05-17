@@ -22,7 +22,7 @@ class DirichletEnergy(nn.Module):
         self.gate = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU()
+            nn.SiLU()
         )
     
     def forward(self, x):
@@ -126,7 +126,7 @@ def load_grasp_diffusion(args) -> models.GraspDiffusionFields:
     energy_net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(hidden_dim, 1),
     )
 
@@ -152,6 +152,11 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
         vision_encoder = models.vision_encoder.VNNPointnet2(out_features=v_enc_params['latent_size'], device=device, in_features=in_features)
     # Geometry encoder
     geometry_encoder = models.geometry_encoder.map_projected_points
+    
+    use_silu = args.get('use_silu', False)
+    ACTIVATE_MODULE = nn.SiLU if use_silu else nn.ReLU
+    print(f"Using {ACTIVATE_MODULE} activation function")
+    
     # Feature Encoder
     feature_encoder = models.nets.TimeLatentFeatureEncoder(
             enc_dim=feat_enc_params['enc_dim'],
@@ -165,7 +170,8 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
             xyz_in_all = feat_enc_params["xyz_in_all"],
             use_tanh = feat_enc_params["use_tanh"],
             latent_dropout = feat_enc_params["latent_dropout"],
-            weight_norm= feat_enc_params["weight_norm"]
+            weight_norm = feat_enc_params["weight_norm"],
+            act_module = ACTIVATE_MODULE,
         )
     # 3D Points
     if 'loc' in points_params:
@@ -188,14 +194,14 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
         energy_net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            ACTIVATE_MODULE(),
             nn.Linear(hidden_dim, 1),
         )
     elif distribution in ['dirichlet', 'dirichlet_neg']:
         energy_net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            ACTIVATE_MODULE(),
             nn.Linear(hidden_dim, 2),
         )
     else:
@@ -204,9 +210,10 @@ def load_pointcloud_grasp_diffusion(args) -> models.GraspDiffusionFields:
     dirichlet_scale = args.get('dirichlet_scale', 1.0)
     alpha_activation = args.get('alpha_activation', 'exp')
     learnable_temp = args.get('learnable_temp', False)
+    detach_sdf = args.get('detach_sdf', False)
     model = models.GraspDiffusionFields(vision_encoder=vision_encoder, feature_encoder=feature_encoder, 
                                         geometry_encoder=geometry_encoder, decoder=energy_net, points=points, 
-                                        num_scene_points=num_scene_points, distribution=distribution, 
+                                        num_scene_points=num_scene_points, distribution=distribution, detach_sdf=detach_sdf,
                                         dirichlet_scale=dirichlet_scale, alpha_activation=alpha_activation, learnable_temp = learnable_temp)
     model.to(device)
     return model
