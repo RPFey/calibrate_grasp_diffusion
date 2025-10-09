@@ -66,10 +66,9 @@ def compute_difference(grasp_prediction: torch.Tensor, grasp_gt: torch.Tensor) -
     
     return difference
 
-def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
-          summary_fn=None, iters_til_checkpoint=None, val_dataloader=None, clip_grad=False, val_loss_fn=None,
-          run_bullet=False, optimizers=None, batches_per_validation=10,  rank=0, max_steps=None, device='cpu',
-          generation_step=-1):
+def train(model, train_dataloader, total_training_steps, lr, steps_til_summary, model_dir, loss_fn,
+          summary_fn=None, steps_til_checkpoint=None, val_dataloader=None, clip_grad=False, val_loss_fn=None,
+          run_bullet=False, optimizers=None, rank=0, max_steps=None, device='cpu'):
 
     if optimizers is None:
         optimizers = [torch.optim.Adam(lr=lr, params=model.parameters())]
@@ -90,11 +89,9 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
             optim.load_state_dict(state)
         if rank == 0:
             logging.info("Loaded model from the previous checkpoint")
-        total_steps = states['steps']   
-        start_epochs = total_steps // len(train_dataloader)
+        total_steps = states['steps']
     else:
         total_steps = 0
-        start_epochs = 0
 
     if rank == 0:
         makedirs(summaries_dir)
@@ -113,8 +110,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                                                     num_scene_pts=acronym_dataset.num_scene_pts, num_target_pts=acronym_dataset.num_target_pts)
         bullet_dataloader = DataLoader(bullet_dataset, batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
         full_loader = [train_dataloader, bullet_dataloader]
-        # update the start epoch
-        start_epochs = total_steps // ( len(train_dataloader) + len(bullet_dataloader) )
         
         bullet_val_dataset = datasets.PointcloudSceneAcronymAndSDFDataset(acronym_dataset.root_dir, class_type=["Bullet"], split='test',
                                                                     num_scene_pts=acronym_dataset.num_scene_pts, num_target_pts=acronym_dataset.num_target_pts)
@@ -123,197 +118,143 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
     
     # The batch argument does not take effect here
     # generation_step = -1
-    sampler = Grasp_AnnealedLD(model, batch=1, T=generation_step, T_fit=2, k_steps=1, device=device)
-    with tqdm(range(total_steps, len(train_dataloader) * epochs)) as pbar:
-        train_losses = []
-        for epoch in range(start_epochs, epochs):
-            # aps = []
-            model.train()
-            for loader in full_loader:
-                for step, (model_input, gt) in enumerate(loader):
-                    model_input = dict_to_device(model_input, device)
-                    gt = dict_to_device(gt, device)
-                    
-                    if cm.should_exit():
-                        writer.close()
-                        cm.requeue()
-                    
-                    # generate poses in current batch
-                    if generation_step > 0:
-                        # # set the current generation step
-                        # curr_iter_gen_step = np.random.randint(10, generation_step + 1)
-                        # sampler.T = curr_iter_gen_step
+    loader_idx = 0
+    loader_iter = iter(full_loader[loader_idx])
+    pbar = tqdm(range(total_steps, total_training_steps))
+   
+    while total_steps < total_training_steps:
+        # train_losses = [] 
+        # aps = []
+        if cm.should_exit():
+            writer.close()
+            cm.requeue()
+        
+        model.train()
+        try:
+            (model_input, gt) = next(loader_iter)
+        except StopIteration:
+            loader_idx = (loader_idx + 1) % len(full_loader)
+            loader_iter = iter(full_loader[loader_idx])
+            (model_input, gt) = next(loader_iter)
+        
+        model_input = dict_to_device(model_input, device)
+        gt = dict_to_device(gt, device)
+        forward_start_time = time.time()
+        losses, iter_info = loss_fn(model, model_input, gt)
+        
+        if rank == 0:
+            forward_time  = time.time() - forward_start_time
+            logging.info("Forward time: %0.6f" % (forward_time))
+            if 'ap' in iter_info:
+                writer.add_scalar("train_ap", iter_info["ap"], total_steps)
+            if 'noise_ap' in iter_info:
+                writer.add_scalar("train_noise_ap", iter_info["noise_ap"], total_steps)
 
-                        # sampling
-                        forward_start_time = time.time()
-                        # disable grad
-                        model.eval()
-                        for params in model.parameters():  
-                            params.requires_grad = False
-                        
-                        # set the visual context for the model
-                        c = model_input['visual_context']
-                        target_index = model_input.get('target_index', None)    
-                        model.set_latent(c, target_index=target_index)
-                        pose_batch = model_input["x_ene_pos"].shape[0] * model_input["x_ene_pos"].shape[1]
-                        updated_samples, _ = sampler.sample(batch=pose_batch)
-                        model_input["generated_grasps"] = updated_samples.detach().reshape(model_input["x_ene_pos"].shape[0], -1, 4, 4)
-                        
-                        # enable grad
-                        for params in model.parameters():
-                            params.requires_grad = True
-                        model.train()
-                        logging.info("Sampling time: %0.6f" % (time.time() - forward_start_time))
+        train_loss = 0.
+        for loss_name, loss in losses.items():
+            single_loss = loss.mean()
+            if rank == 0:
+                writer.add_scalar(loss_name, single_loss, total_steps)
+            train_loss += single_loss
+        
+        if rank == 0:
+            writer.add_scalar("total_train_loss", train_loss, total_steps)                     
+            writer.add_scalar("temp", model.temperature, total_steps)
 
-                    forward_start_time = time.time()
-                    losses, iter_info = loss_fn(model, model_input, gt)
-                    
-                    if rank == 0:
-                        forward_time  = time.time() - forward_start_time
-                        logging.info("Forward time: %0.6f" % (forward_time))
-                        if 'ap' in iter_info:
-                            writer.add_scalar("train_ap", iter_info["ap"], total_steps)
-                        if 'noise_ap' in iter_info:
-                            writer.add_scalar("train_noise_ap", iter_info["noise_ap"], total_steps)
+        backward_start_time = time.time()
+        for optim in optimizers:
+            optim.zero_grad()
+        train_loss.backward()
+        if rank == 0:
+            backward_time = time.time() - backward_start_time
+            logging.info("Backward time: %0.6f" % (backward_time))
 
-                    train_loss = 0.
-                    for loss_name, loss in losses.items():
-                        single_loss = loss.mean()
-                        if rank == 0:
-                            writer.add_scalar(loss_name, single_loss, total_steps)
-                        train_loss += single_loss
-                    
-                    # if 'ap' in losses: 
-                    #     aps.append(1 - losses["ap"]) # only for ap loss
+        if clip_grad:
+            if isinstance(clip_grad, bool):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
 
-                    train_losses.append(train_loss.item())
-                    if rank == 0:
-                        writer.add_scalar("total_train_loss", train_loss, total_steps)                     
-                        writer.add_scalar("temp", model.temperature, total_steps)
+        for optim in optimizers:
+            optim.step()
 
+        # update progress
+        if rank == 0:
+            pbar.update(1)
+            pbar.set_postfix(suffix=f"Steps {total_steps}, f-t {forward_time:.4f}, b-t {backward_time:.4f}")
+            total_steps += 1
 
-                    backward_start_time = time.time()
-                    for optim in optimizers:
-                        optim.zero_grad()
-                    train_loss.backward()
-                    if rank == 0:
-                        backward_time = time.time() - backward_start_time
-                        logging.info("Backward time: %0.6f" % (backward_time))
-
-                    if clip_grad:
-                        if isinstance(clip_grad, bool):
-                            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
-                        else:
-                            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
-
-                    for optim in optimizers:
-                        optim.step()
-
-                    if rank == 0:
-                        pbar.update(1)
-                        pbar.set_postfix(suffix=f"Ep {epoch}, f-t {forward_time:.4f}, b-t {backward_time:.4f}")
-
-                    total_steps += 1
-                    if max_steps is not None and total_steps==max_steps:
-                        break
-
-            # dynamic adjust number of positive samples
-            # if len(aps) > 0:
-            #     average_ap = np.array(aps).mean()
-            #     last_pos_num = train_dataloader.dataset.num_pos
-            #     if average_ap > 0.75:
-            #         logging.info("Decrease the number of positive samples")
-            #         train_dataloader.dataset.num_pos = train_dataloader.dataset.num_pos // 2
-            #         train_dataloader.dataset.num_pos = max(4, train_dataloader.dataset.num_pos)
-            #     elif average_ap < 0.25:
-            #         logging.info("Increase the number of positive samples")
-            #         train_dataloader.dataset.num_pos = train_dataloader.dataset.num_pos * 2
-            #         train_dataloader.dataset.num_pos = min(128, train_dataloader.dataset.num_pos)
-            #     train_dataloader.dataset.num_neg = train_dataloader.dataset.num_neg + (last_pos_num - train_dataloader.dataset.num_pos)
+        if (not total_steps % (steps_til_summary) ) and rank == 0:
+            print("Step Summary ... ")
+            if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
+                os.remove(os.path.join(checkpoints_dir, 'model_current.pth'))
             
-            if (not epoch % (epochs_til_checkpoint // 2) ) and rank == 0:
-                print("Step Summary ... ")
-                if os.path.exists(os.path.join(checkpoints_dir, 'model_current.pth')):
-                    os.remove(os.path.join(checkpoints_dir, 'model_current.pth'))
-                
-                state_dict = {
-                    "model_state": model.state_dict(),
-                    "optimizers": [optim.state_dict() for optim in optimizers],
-                    "steps": total_steps
-                }
-                torch.save(state_dict, os.path.join(checkpoints_dir, 'model_current.pth'))
-                
-                # this function is weird ... 
-                # TODO Uncomment these lines for visualization. 
-                # It does not work on a40 card and will cause memory issue.
-                # if summary_fn is not None:
-                #     summary_fn(model, model_input, gt, iter_info, writer, total_steps)
+            state_dict = {
+                "model_state": model.state_dict(),
+                "optimizers": [optim.state_dict() for optim in optimizers],
+                "steps": total_steps
+            }
+            torch.save(state_dict, os.path.join(checkpoints_dir, 'model_current.pth'))
             
-            if (not epoch % epochs_til_checkpoint) and rank == 0 and epoch > 0:
-
-                print("Save Checkpoint ... ")
-                state_dict = {
-                    "model_state": model.state_dict(),
-                    "optimizers": [optim.state_dict() for optim in optimizers],
-                    "steps": total_steps
-                }
-                torch.save(state_dict, os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
+            # this function is weird ... 
+            # TODO Uncomment these lines for visualization. 
+            # It does not work on a40 card and will cause memory issue.
+            # if summary_fn is not None:
+            #     summary_fn(model, model_input, gt, iter_info, writer, total_steps)
+        
+        if ( total_steps % int(steps_til_checkpoint) == 0 ) and rank == 0 and total_steps > 0:
+            print("Save Checkpoint ... ")
+            state_dict = {
+                "model_state": model.state_dict(),
+                "optimizers": [optim.state_dict() for optim in optimizers],
+                "steps": total_steps
+            }
+            torch.save(state_dict, os.path.join(checkpoints_dir, 'model_iter_%06d.pth' % (total_steps)))
+            
+            # evaltion 
+            if val_dataloader is not None:
+                for name, val_loader in val_dataloaders.items():
+                    eval(model, val_loader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn, prefix=name,
+                            device=device, writer=writer, total_steps=total_steps)
                 
-                # evaltion 
-                if val_dataloader is not None:
-                    for name, val_loader in val_dataloaders.items():
-                        eval(model, val_loader, val_loss_fn, logdir=model_dir, summary_fn=summary_fn, prefix=name,
-                             device=device, writer=writer, epoch=epoch, total_steps=total_steps)
-                    
-                    # run bullet_evaluator
-                    tmp_dir = os.path.join(model_dir, 'tmp')
-                    evaluator = BulletEvaluator(tmp_dir, 64, save_data = False)   
-                    try:
-                        for n in [2, 4, 8]:
-                            random_seeds = np.random.choice(int(1e4), (4, ), replace=False)
-                            # random sample 20 seeds from 
-                            totals = 0
-                            successes = 0
+                # run bullet_evaluator
+                tmp_dir = os.path.join(model_dir, 'tmp')
+                evaluator = BulletEvaluator(tmp_dir, 64, save_data = False)   
+                try:
+                    for n in [2, 4, 8]:
+                        random_seeds = np.random.choice(int(1e4), (4, ), replace=False)
+                        # random sample 20 seeds from 
+                        totals = 0
+                        successes = 0
+                        
+                        for s in random_seeds:
+                            total, success = evaluator.evaluate_model(model, total_steps, n, s)
+                            totals += len(total)
+                            total_success = sum(np.array(success) > 0)
+                            if not isinstance(total_success, int):
+                                total_success = total_success.item()
+                            successes += total_success
                             
-                            for s in random_seeds:
-                                total, success = evaluator.evaluate_model(model, total_steps, n, s)
-                                totals += len(total)
-                                total_success = sum(np.array(success) > 0)
-                                if not isinstance(total_success, int):
-                                    total_success = total_success.item()
-                                successes += total_success
-                                
-                            success_ratio = successes / totals
-                            writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
+                        success_ratio = successes / totals
+                        writer.add_scalar(f'bullet_eval_{n}', success_ratio, total_steps)
 
-                            if successes <= 0:
-                                raise StopIteration(f"Bullet evaluation failed at {n}")
-                    
-                    except StopIteration as e:
-                        print(e)
-                    
-                    # create & add new bullet dataset
-                    # if run_bullet:
-                    #     complementary_dataset = evaluator.get_dataset([total_steps], list(range(2, 8)),
-                    #                                                 dataset_args = {"num_scene_pts": acronym_dataset.num_scene_pts, 
-                    #                                                                     "num_target_pts": acronym_dataset.num_target_pts} )
-                    #     complementary_dataloader = DataLoader(complementary_dataset, 
-                    #                                             batch_size=train_dataloader.batch_size, shuffle=True, num_workers=train_dataloader.num_workers)
-                    #     full_loader = [complementary_dataloader, train_dataloader]
+                        if successes <= 0:
+                            raise StopIteration(f"Bullet evaluation failed at {n}")
+                
+                except StopIteration as e:
+                    print(e)
 
-            if max_steps is not None and total_steps==max_steps:
-                break
         
-        state_dict = {
-            "model_state": model.state_dict(),
-            "optimizers": [optim.state_dict() for optim in optimizers],
-            "steps": total_steps
-        }   
-        torch.save(state_dict, os.path.join(checkpoints_dir, 'model_final.pth'))
-        # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_final.txt'), np.array(train_losses))
-        
-        writer.close()
-        return model, optimizers
+    state_dict = {
+        "model_state": model.state_dict(),
+        "optimizers": [optim.state_dict() for optim in optimizers],
+        "steps": total_steps
+    }   
+    torch.save(state_dict, os.path.join(checkpoints_dir, 'model_final.pth'))
+    # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_final.txt'), np.array(train_losses))
+    
+    writer.close()
+    return model, optimizers
     
     
 def train_ebm(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
@@ -515,7 +456,7 @@ def train_ebm(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til
 
 @torch.no_grad()
 def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
-            device=torch.device("cuda:0"),  writer=None, epoch = 0, total_steps = 0):
+            device=torch.device("cuda:0"),  writer=None, total_steps = 0):
     # sample poses 
     from se3dif.samplers import ApproximatedGrasp_AnnealedLD, Grasp_AnnealedLD
     model.eval()
@@ -643,7 +584,7 @@ def eval(model, val_dataloader, loss_fn, logdir, summary_fn, prefix='',
     fig_, ax_ = bprc.plot(score=True)
     # save the pr curve stats from bprc
     
-    print(f"Ep {epoch}, Validation mAP: {mAP}")
+    print(f"Step {total_steps}, Validation mAP: {mAP}")
     stats = {}
     if writer is not None:
         writer.add_scalar(f'{prefix}val_mAP', mAP, total_steps)

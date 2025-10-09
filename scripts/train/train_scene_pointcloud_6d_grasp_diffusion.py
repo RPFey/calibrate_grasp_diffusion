@@ -134,13 +134,13 @@ def main(opt):
     optimizer = torch.optim.Adam(param_list)
 
     # Train
-    generation_step = args.get('generation_steps', -1)
     if not opt.eval:
-        trainer.train(model=model.float(), train_dataloader=train_dataloader, epochs=args['TrainSpecs']['num_epochs'], model_dir= exp_dir,
-                    summary_fn=summary, device=device, lr=1e-4, optimizers=[optimizer],
-                    steps_til_summary=args['TrainSpecs']['steps_til_summary'], epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
-                    loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'], clip_grad=False, val_loss_fn=val_loss_fn, run_bullet=opt.bullet,
-                    val_dataloader=test_dataloader, generation_step=generation_step)
+        trainer.train(model=model.float(), train_dataloader=train_dataloader, total_training_steps=args['TrainSpecs']['total_training_steps'], 
+                      model_dir= exp_dir, summary_fn=summary, device=device, lr=1e-4, optimizers=[optimizer],
+                      steps_til_summary=args['TrainSpecs']['steps_til_summary'],
+                      loss_fn=loss_fn, steps_til_checkpoint=args['TrainSpecs']['steps_til_checkpoint'], 
+                      clip_grad=False, val_loss_fn=val_loss_fn, run_bullet=opt.bullet,
+                      val_dataloader=test_dataloader)
     else:
         val_dataloaders = {"acronym": test_dataloader}
     
@@ -154,11 +154,10 @@ def main(opt):
         if opt.eval_ckpt is not None:            
             states = torch.load(opt.eval_ckpt, map_location=device)
             model.load_state_dict(states['model_state'], strict=True)
-            total_steps = states['steps']   
-            start_epochs = total_steps // len(train_dataloader)
+            total_steps = states['steps']
             for name, data_loader in val_dataloaders.items():
                 trainer.eval(model=model, val_dataloader=data_loader, logdir=exp_dir, summary_fn=summary, prefix=name,
-                                loss_fn=loss_fn, device=device, epoch = start_epochs, total_steps = total_steps)
+                                loss_fn=loss_fn, device=device, total_steps = total_steps)
 
         else:
             checkpoints_dir = os.path.join(exp_dir, 'checkpoints')
@@ -169,12 +168,11 @@ def main(opt):
                 print(" Evaluate checkpoint: ", ckpt)
                 states = torch.load(ckpt, map_location=device)
                 model.load_state_dict(states['model_state'], strict=True)
-                total_steps = states['steps']   
-                start_epochs = total_steps // len(train_dataloader)
+                total_steps = states['steps']
 
                 for name, data_loader in val_dataloaders.items():
                     trainer.eval(model=model, val_dataloader=data_loader, logdir=exp_dir, summary_fn=summary, prefix=name,
-                                loss_fn=loss_fn, device=device, epoch = start_epochs, total_steps = total_steps)
+                                loss_fn=loss_fn, device=device, total_steps = total_steps)
                     
 if __name__ == '__main__':
     args = parse_args()

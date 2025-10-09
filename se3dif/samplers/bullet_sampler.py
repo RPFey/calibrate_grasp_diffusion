@@ -566,6 +566,8 @@ if __name__ == '__main__':
             print(f"No. objs {k}, total trial {v[0]}, success {v[1]}")
             
         import matplotlib.pyplot as plt
+        plt.rcParams.update({'font.size': 20}) # set font size 
+        
         total_pred = np.concatenate(total_pred, axis=0)
         # do normalization for all samples
         # if model.distribution == 'direct':
@@ -610,7 +612,7 @@ if __name__ == '__main__':
         #     sr.append(np.mean(total_gt[(total_pred >= pred_q[i]) & (total_pred < pred_q[i + 1])]))
         
         expname = opt.spec_file.split("/")[-1]
-        plt.figure()
+        plt.figure(figsize=(12, 12))
         plt.plot(np.arange(n_bins) / n_bins, sr, label="sr", color='red')
         ax = plt.gca()
         # bar plot the weight 
@@ -621,7 +623,7 @@ if __name__ == '__main__':
         
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
-        ax.set_xlabel("Quantile")
+        ax.set_xlabel("Prediction")
         ax.set_ylabel("SR")
         ax.set_title(f"ECE: {ece:.4f} AP: {ap:.4f}")
         ax.legend()
@@ -642,7 +644,7 @@ if __name__ == '__main__':
             uncern = 2 / S
             pos_pred = alphas[:, 0] / S
             
-            plt.figure(figsize=(24, 24))
+            plt.figure(figsize=(12, 12))
             plt.scatter(pos_pred[total_gt == 0], uncern[total_gt == 0], marker='x', label='failure', alpha=0.5)
             plt.scatter(pos_pred[total_gt == 1], uncern[total_gt == 1], marker='+', label='success')
             ax = plt.gca()
@@ -675,7 +677,7 @@ if __name__ == '__main__':
 
             axes[0].set_xlim(0, 1)
             axes[0].set_ylim(0, 1)
-            axes[0].set_xlabel("Quantile")
+            axes[0].set_xlabel("Prediction")
             axes[0].set_ylabel("SR")
             axes[0].legend()
             
