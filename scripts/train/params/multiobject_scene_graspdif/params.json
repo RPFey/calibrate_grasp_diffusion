@@ -6,10 +6,9 @@
   "num_target_points": 512,
   "TrainSpecs": {
     "batch_size": 24,
-    "num_epochs": 20000,
-    "steps_til_summary": 500,
-    "iters_til_checkpoint": 5000,
-    "epochs_til_checkpoint": 100
+    "total_training_steps": 200000,
+    "steps_til_summary": 2000,
+    "steps_til_checkpoint": 10000
   },
   "NetworkArch" : "PointcloudGraspDiffusion",
   "NetworkSpecs" : {
